@@ -6,14 +6,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment // Required for Box contentAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavController // <-- Add this import
+import com.example.expendium.ui.navigation.AppDestinations // <-- Add this import
 import com.example.expendium.ui.viewmodel.TransactionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    navController: NavController, // <-- Add NavController parameter
     transactionViewModel: TransactionViewModel = hiltViewModel()
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -42,7 +48,7 @@ fun MainScreen(
             if (selectedTab == 0) { // Show FAB only on transactions tab
                 FloatingActionButton(
                     onClick = {
-                        // TODO: Navigate to add transaction screen
+                        navController.navigate(AppDestinations.ADD_TRANSACTION_ROUTE) // <-- Navigate here
                     }
                 ) {
                     Icon(Icons.Filled.Add, contentDescription = "Add Transaction")
@@ -50,11 +56,18 @@ fun MainScreen(
             }
         }
     ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues)) {
+        Box(
+            modifier = Modifier
+                .padding(paddingValues)
+                .fillMaxSize() // Ensure Box fills the available space
+        ) {
             when (selectedTab) {
-                0 -> TransactionListScreen(viewModel = transactionViewModel)
+                0 -> TransactionListScreen(
+                    viewModel = transactionViewModel,
+                    // navController = navController // Pass if TransactionListScreen needs it for detail view
+                )
                 1 -> ReportsScreen()
-                2 -> CategoriesScreen()
+                2 -> CategoriesScreen(navController = navController) // Pass if it needs navigation
                 3 -> SettingsScreen()
             }
         }
@@ -68,21 +81,31 @@ data class NavigationItem(
 
 @Composable
 fun ReportsScreen() {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center // Center the text
+    ) {
         Text("Reports Screen - Coming Soon!")
     }
 }
 
 @Composable
-fun CategoriesScreen() {
-    Box(modifier = Modifier.fillMaxSize()) {
+fun CategoriesScreen(navController: NavController) { // Example of passing NavController
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center // Center the text
+    ) {
         Text("Categories Screen - Coming Soon!")
+        // TODO: Add a FAB here to navigate to an AddCategoryScreen later
     }
 }
 
 @Composable
 fun SettingsScreen() {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center // Center the text
+    ) {
         Text("Settings Screen - Coming Soon!")
     }
 }
