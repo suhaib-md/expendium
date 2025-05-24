@@ -12,8 +12,8 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions ORDER BY transactionDate DESC")
     fun getAllTransactions(): Flow<List<Transaction>>
 
-    @Query("SELECT * FROM transactions WHERE transactionId = :id")
-    suspend fun getTransactionById(id: Long): Transaction?
+    @Query("SELECT * FROM transactions WHERE transactionId = :transactionId")
+    fun getTransactionById(transactionId: Long): Flow<Transaction?> // Can be nullable if ID not found
 
     @Query("SELECT * FROM transactions WHERE transactionDate BETWEEN :startDate AND :endDate ORDER BY transactionDate DESC")
     fun getTransactionsByDateRange(startDate: Long, endDate: Long): Flow<List<Transaction>>

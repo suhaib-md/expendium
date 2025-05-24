@@ -48,7 +48,7 @@ fun MainScreen(
             if (selectedTab == 0) { // Show FAB only on transactions tab
                 FloatingActionButton(
                     onClick = {
-                        navController.navigate(AppDestinations.ADD_TRANSACTION_ROUTE) // <-- Navigate here
+                        navController.navigate(AppDestinations.ADD_TRANSACTION_BASE_ROUTE) // <-- Navigate here
                     }
                 ) {
                     Icon(Icons.Filled.Add, contentDescription = "Add Transaction")
@@ -64,7 +64,7 @@ fun MainScreen(
             when (selectedTab) {
                 0 -> TransactionListScreen(
                     viewModel = transactionViewModel,
-                    // navController = navController // Pass if TransactionListScreen needs it for detail view
+                    navController = navController // Pass if TransactionListScreen needs it for detail view
                 )
                 1 -> ReportsScreen()
                 2 -> CategoriesScreen(navController = navController) // Pass if it needs navigation
@@ -86,17 +86,6 @@ fun ReportsScreen() {
         contentAlignment = Alignment.Center // Center the text
     ) {
         Text("Reports Screen - Coming Soon!")
-    }
-}
-
-@Composable
-fun CategoriesScreen(navController: NavController) { // Example of passing NavController
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center // Center the text
-    ) {
-        Text("Categories Screen - Coming Soon!")
-        // TODO: Add a FAB here to navigate to an AddCategoryScreen later
     }
 }
 

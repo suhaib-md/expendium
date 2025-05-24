@@ -11,5 +11,6 @@ data class Category(
     val name: String,
     val iconName: String? = null,
     val colorHex: String? = null,
-    val type: TransactionType = TransactionType.EXPENSE
+    val type: TransactionType = TransactionType.EXPENSE,
+    val updatedAt: Long = System.currentTimeMillis()
 )

@@ -27,4 +27,8 @@ class CategoryRepository @Inject constructor(
     suspend fun deleteCategory(category: Category) = categoryDao.deleteCategory(category)
 
     suspend fun deleteCategoryById(id: Long) = categoryDao.deleteCategoryById(id)
+
+    fun getCategoryByNameAndType(name: String, type: TransactionType): Flow<Category?> {
+        return categoryDao.getCategoryByNameAndType(name, type)
+    }
 }

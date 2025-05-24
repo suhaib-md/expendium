@@ -18,7 +18,7 @@ interface CategoryDao {
     @Query("SELECT * FROM categories WHERE categoryId = :id")
     suspend fun getCategoryById(id: Long): Category?
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCategory(category: Category): Long
 
     @Update
@@ -29,4 +29,8 @@ interface CategoryDao {
 
     @Query("DELETE FROM categories WHERE categoryId = :id")
     suspend fun deleteCategoryById(id: Long)
+
+    @Query("SELECT * FROM categories WHERE name = :name AND type = :type LIMIT 1")
+    fun getCategoryByNameAndType(name: String, type: TransactionType): Flow<Category?> // Changed to Flow
+
 }
