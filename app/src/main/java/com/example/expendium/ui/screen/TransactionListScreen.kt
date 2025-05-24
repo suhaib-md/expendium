@@ -4,10 +4,11 @@ package com.example.expendium.ui.screen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items // Correct import for items in LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Receipt // For empty state
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings // Import Settings icon
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,27 +16,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle // Recommended way
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
-import com.example.expendium.data.model.Transaction // Keep this
-import com.example.expendium.data.model.TransactionType // For TransactionItem color logic
-import com.example.expendium.ui.navigation.AppDestinations
-import com.example.expendium.ui.navigation.navigateToTransactionDetail // <--- IMPORT THE HELPER
-import com.example.expendium.ui.viewmodel.TransactionUiState // If needed directly
+import com.example.expendium.data.model.Transaction
+import com.example.expendium.data.model.TransactionType
+// Remove this if AppDestinations is not directly used here
+// import com.example.expendium.ui.navigation.AppDestinations
+import com.example.expendium.ui.navigation.navigateToTransactionDetail
+import com.example.expendium.ui.viewmodel.TransactionUiState
 import com.example.expendium.ui.viewmodel.TransactionViewModel
-import com.example.expendium.ui.viewmodel.TransactionWithCategory // Import the combined data class
+import com.example.expendium.ui.viewmodel.TransactionWithCategory
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.*
 
 // Helper function (place in a utility file e.g., utils/Formatters.kt)
 fun formatCurrency(amount: Double, locale: Locale = Locale.getDefault()): String {
-    // Using NumberFormat for better, locale-aware currency formatting
     val currencyFormat = NumberFormat.getCurrencyInstance(locale)
-    // You might want to configure the currency symbol or other properties based on your app's needs
-    // For specific currency like INR:
-    // val customLocale = Locale("en", "IN")
-    // val currencyFormat = NumberFormat.getCurrencyInstance(customLocale)
     return currencyFormat.format(amount)
 }
 
@@ -48,12 +45,11 @@ fun formatDateShort(timestamp: Long, format: String = "MMM dd, yyyy"): String {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransactionListScreen(
-    navController: NavController,
-    viewModel: TransactionViewModel // No need to hiltViewModel() if passed from MainScreen's NavHost
+    navController: NavController, // Still needed for item clicks
+    viewModel: TransactionViewModel, // Passed from MainScreen's NavHost
+    onNavigateToSettings: () -> Unit // Callback to navigate to settings
 ) {
-    // Use collectAsStateWithLifecycle for lifecycle-aware collection
     val transactionsWithCategories by viewModel.transactionsWithCategoryNames.collectAsStateWithLifecycle()
-    // val categories by viewModel.categories.collectAsStateWithLifecycle() // For category filter dropdown
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -63,14 +59,30 @@ fun TransactionListScreen(
                 message = it,
                 duration = SnackbarDuration.Short
             )
-            viewModel.clearError() // Important to clear the error after showing
+            viewModel.clearError()
         }
     }
 
+    // This Scaffold is local to TransactionListScreen.
+    // If MainScreen provides a global Scaffold and TopAppBar, this might be simpler or different.
     Scaffold(
+        /*
+        // Example: If TransactionListScreen is responsible for its own TopAppBar
+        topBar = {
+            TopAppBar(
+                title = { Text("Transactions") },
+                actions = {
+                    IconButton(onClick = onNavigateToSettings) { // Use the callback here
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "Settings"
+                        )
+                    }
+                }
+            )
+        },
+        */
         snackbarHost = { SnackbarHost(snackbarHostState) }
-        // You can add a TopAppBar here if this screen is standalone
-        // or it will inherit from MainScreen if it's a tab.
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -78,15 +90,11 @@ fun TransactionListScreen(
                 .padding(paddingValues) // Apply padding from Scaffold
                 .padding(horizontal = 16.dp) // Add horizontal padding for content
         ) {
-            // Header with summary - Using the one from your provided code
-            // TransactionSummaryCard(transactions = transactionsWithCategories.map { it.transaction })
-            // Or a simplified one:
             if (transactionsWithCategories.isNotEmpty()){
                 Spacer(modifier = Modifier.height(8.dp))
                 TransactionSummaryInfo(transactionsWithCategories.map {it.transaction})
                 Spacer(modifier = Modifier.height(16.dp))
             }
-
 
             OutlinedTextField(
                 value = uiState.searchQuery,
@@ -121,8 +129,8 @@ fun TransactionListScreen(
                         TransactionItem(
                             transaction = transactionWithCategory.transaction,
                             categoryName = transactionWithCategory.categoryName,
-                            onItemClick = { transactionIdValue -> // Renamed lambda param for clarity
-                                navController.navigateToTransactionDetail(transactionIdValue) // Use the helper
+                            onItemClick = { transactionIdValue ->
+                                navController.navigateToTransactionDetail(transactionIdValue)
                             }
                         )
                     }
@@ -171,19 +179,15 @@ fun TransactionItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onItemClick(transaction.transactionId) }, // Make item clickable
+            .clickable { onItemClick(transaction.transactionId) },
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(12.dp) // Slightly reduced padding for a denser look
+                .padding(12.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Optional: Icon for category or transaction type
-            // Icon(imageVector = if(transaction.type == TransactionType.INCOME) Icons.Default.TrendingUp else Icons.Default.TrendingDown, contentDescription = transaction.type.name)
-            // Spacer(modifier = Modifier.width(8.dp))
-
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = transaction.merchantOrPayee,
@@ -196,7 +200,7 @@ fun TransactionItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = formatDateShort(transaction.transactionDate), // Using the short format
+                    text = formatDateShort(transaction.transactionDate),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -206,7 +210,7 @@ fun TransactionItem(
                 text = formatCurrency(transaction.amount),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = if (transaction.type == TransactionType.INCOME) Color(0xFF2E7D32) /* Darker Green */ else MaterialTheme.colorScheme.error
+                color = if (transaction.type == TransactionType.INCOME) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
             )
         }
     }
@@ -222,8 +226,8 @@ fun EmptyState(messageLine1: String, messageLine2: String) {
         verticalArrangement = Arrangement.Center
     ) {
         Icon(
-            Icons.Filled.Receipt, // Or choose a more relevant icon
-            contentDescription = null, // Decorative
+            Icons.Filled.Receipt,
+            contentDescription = null,
             modifier = Modifier.size(64.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
