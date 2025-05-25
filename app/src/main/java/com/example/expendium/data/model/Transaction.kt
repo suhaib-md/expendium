@@ -16,7 +16,7 @@ import androidx.room.Index
             onDelete = ForeignKey.SET_NULL
         )
     ],
-    indices = [Index(value = ["categoryId"])]
+    indices = [Index(value = ["categoryId"]),Index(value = ["accountId"])]
 )
 data class Transaction(
     @PrimaryKey(autoGenerate = true)
@@ -29,6 +29,7 @@ data class Transaction(
     val notes: String? = null,
     val paymentMode: String,
     val isManual: Boolean = true,
+    val accountId: Long?,
     val originalSmsId: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

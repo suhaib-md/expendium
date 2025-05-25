@@ -76,6 +76,14 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
 
+    // WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0") // Check for the latest version
+
+    // Hilt for WorkManager
+    implementation("androidx.hilt:hilt-work:1.2.0") // Check for the latest version
+    kapt("androidx.hilt:hilt-compiler:1.2.0") // Check for the latest version
+
+
     // Hilt for Dependency Injection
     implementation("com.google.dagger:hilt-android:2.48.1")
     kapt("com.google.dagger:hilt-compiler:2.48.1")

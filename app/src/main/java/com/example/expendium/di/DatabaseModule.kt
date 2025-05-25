@@ -11,6 +11,10 @@ import com.example.expendium.data.database.ExpendiumDatabase
 import com.example.expendium.data.dao.TransactionDao
 import com.example.expendium.data.dao.CategoryDao
 import com.example.expendium.data.dao.BudgetDao
+import com.example.expendium.data.dao.AccountDao
+import com.example.expendium.data.repository.AccountRepository // Interface
+import com.example.expendium.data.repository.AccountRepositoryImpl // Implementation
+import dagger.Binds
 import javax.inject.Singleton
 
 @Module
@@ -43,4 +47,21 @@ object DatabaseModule {
     fun provideBudgetDao(database: ExpendiumDatabase): BudgetDao {
         return database.budgetDao()
     }
+
+    @Provides
+    fun provideAccountDao(database: ExpendiumDatabase): AccountDao {
+        return database.accountDao()
+    }
+}
+
+// You can create a new module or add to an existing one
+@Module
+@InstallIn(SingletonComponent::class) // Or ActivityRetainedComponent::class if you want it scoped to ViewModel
+abstract class RepositoryModule { // Note: abstract class for @Binds
+
+    @Binds
+    @Singleton // Or @ActivityRetainedScoped if matching the component
+    abstract fun bindAccountRepository(
+        accountRepositoryImpl: AccountRepositoryImpl
+    ): AccountRepository
 }

@@ -15,7 +15,7 @@ class TransactionRepository @Inject constructor(
 
     fun getAllTransactions(): Flow<List<Transaction>> = transactionDao.getAllTransactions()
 
-    fun getTransactionById(transactionId: Long): Flow<Transaction?> {
+    fun getTransactionById(transactionId: Long?): Flow<Transaction?> {
         return transactionDao.getTransactionById(transactionId)
     }
     fun getTransactionsByDateRange(startDate: Long, endDate: Long): Flow<List<Transaction>> =

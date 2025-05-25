@@ -79,6 +79,7 @@ fun MainScreen(
                 }
             }
         }
+
     ) { paddingValues ->
         Box(
             modifier = Modifier
@@ -99,6 +100,7 @@ fun MainScreen(
                 )
                 reportsTabTitle -> ReportsScreen() // Your existing ReportsScreen
                 categoriesTabTitle -> CategoriesScreen(navController = navController) // Your existing CategoriesScreen
+
                 // The Settings tab now navigates, so it won't typically show content here
                 // unless you have a specific design where it shows something *before* full navigation,
                 // or if settings was a composable swapped here.

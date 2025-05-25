@@ -2,9 +2,12 @@ package com.example.expendium.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+// Import your Account model and AccountRepository
+import com.example.expendium.data.model.Account // Assuming this is your Account data class
 import com.example.expendium.data.model.Category
 import com.example.expendium.data.model.Transaction
 import com.example.expendium.data.model.TransactionType
+import com.example.expendium.data.repository.AccountRepository // Assuming you create this
 import com.example.expendium.data.repository.CategoryRepository
 import com.example.expendium.data.repository.TransactionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -30,14 +33,15 @@ data class TransactionUiState(
 @HiltViewModel
 class TransactionViewModel @Inject constructor(
     private val transactionRepository: TransactionRepository,
-    private val categoryRepository: CategoryRepository
+    private val categoryRepository: CategoryRepository,
+    private val accountRepository: AccountRepository // Inject AccountRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TransactionUiState())
     val uiState: StateFlow<TransactionUiState> = _uiState.asStateFlow()
 
     // Flow for all categories, used to map category IDs to names
-    val categoriesMap: StateFlow<Map<Long, String>> = // Made public for AddTransactionScreen
+    val categoriesMap: StateFlow<Map<Long, String>> =
         categoryRepository.getAllCategories()
             .map { list -> list.associateBy({ it.categoryId }, { it.name }) }
             .stateIn(
@@ -45,6 +49,14 @@ class TransactionViewModel @Inject constructor(
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyMap()
             )
+
+    // Flow for all accounts (NEW)
+    val accounts: StateFlow<List<Account>> = accountRepository.getAllAccounts() // Assuming getAllAccounts() returns Flow<List<Account>>
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     // Filtered and searched transactions combined with their category names
     val transactionsWithCategoryNames: StateFlow<List<TransactionWithCategory>> =
@@ -102,7 +114,7 @@ class TransactionViewModel @Inject constructor(
         // Potentially reset other viewmodel states related to the add/edit form if needed
     }
 
-    fun loadTransactionForEditing(transactionId: Long) {
+    fun loadTransactionForEditing(transactionId: Long?) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             transactionRepository.getTransactionById(transactionId).collectLatest { transaction ->
@@ -120,8 +132,9 @@ class TransactionViewModel @Inject constructor(
         paymentMode: String,
         notes: String?,
         transactionDate: Long,
-        type: TransactionType
-    ): Boolean { // Return true if successful, false otherwise
+        type: TransactionType,
+        accountId: Long? // This parameter is crucial
+    ): Boolean {
         if (merchantOrPayee.isBlank()) {
             _uiState.update { it.copy(isLoading = false, errorMessage = "Merchant/Payee cannot be empty.") }
             return false
@@ -134,6 +147,12 @@ class TransactionViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = false, errorMessage = "Amount must be greater than zero.") }
             return false
         }
+        // NEW: Validate accountId if it's considered mandatory for new transactions
+        if (accountId == null && transactionIdToUpdate == null) { // Only for new transactions, allow null if editing existing without changing account
+            _uiState.update { it.copy(isLoading = false, errorMessage = "Account is required.") }
+            return false
+        }
+
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
@@ -150,11 +169,11 @@ class TransactionViewModel @Inject constructor(
                             notes = notes,
                             transactionDate = transactionDate,
                             type = type,
-                            updatedAt = System.currentTimeMillis()
+                            updatedAt = System.currentTimeMillis(),
+                            accountId = accountId // Ensure accountId is passed for update
                         )
                         transactionRepository.updateTransaction(updatedTransaction)
                     } else {
-                        // This case should ideally not happen if logic is correct
                         _uiState.update { it.copy(isLoading = false, errorMessage = "Error: Transaction to update not found.") }
                         return@launch
                     }
@@ -168,7 +187,8 @@ class TransactionViewModel @Inject constructor(
                         merchantOrPayee = merchantOrPayee,
                         notes = notes,
                         paymentMode = paymentMode,
-                        isManual = true // Assuming manual entry
+                        isManual = true, // Assuming manual entry
+                        accountId = accountId // accountId is now correctly passed
                     )
                     transactionRepository.insertTransaction(transaction)
                 }
@@ -192,7 +212,7 @@ class TransactionViewModel @Inject constructor(
                 if (_selectedTransactionDetail.value?.transactionId == transactionId) {
                     clearSelectedTransactionDetails()
                 }
-                if (_transactionToEdit.value?.transactionId == transactionId) { // Also clear if it was being edited
+                if (_transactionToEdit.value?.transactionId == transactionId) {
                     _transactionToEdit.value = null
                     _uiState.update { it.copy(isEditing = false) }
                 }
@@ -217,11 +237,11 @@ class TransactionViewModel @Inject constructor(
         _uiState.update { it.copy(errorMessage = null) }
     }
 
-    fun setError(message: String) { // Keep this for direct error setting from UI if needed
+    fun setError(message: String) {
         _uiState.update { it.copy(errorMessage = message) }
     }
 
-    fun loadTransactionDetails(transactionId: Long) { // For TransactionDetailScreen
+    fun loadTransactionDetails(transactionId: Long) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             _selectedTransactionDetail.value = null
@@ -232,7 +252,7 @@ class TransactionViewModel @Inject constructor(
                 if (transaction != null) {
                     transaction.categoryId?.let { catId ->
                         val categoryName = categoriesMap.value[catId]
-                            ?: categoryRepository.getCategoryById(catId)?.name
+                            ?: categoryRepository.getCategoryById(catId)?.name // Fallback directly to repo
                             ?: "N/A (Category unknown)"
                         _selectedTransactionCategoryName.value = categoryName
                     } ?: run {
@@ -250,7 +270,4 @@ class TransactionViewModel @Inject constructor(
         _selectedTransactionDetail.value = null
         _selectedTransactionCategoryName.value = null
     }
-
-    // No longer directly returning Flow from here for editing, use _transactionToEdit
-    // fun getTransactionForEditing(transactionId: Long): Flow<Transaction?> { ... }
 }

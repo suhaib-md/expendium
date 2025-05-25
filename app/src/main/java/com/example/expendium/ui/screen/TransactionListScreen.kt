@@ -28,6 +28,8 @@ import com.example.expendium.ui.viewmodel.TransactionViewModel
 import com.example.expendium.ui.viewmodel.TransactionWithCategory
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.expendium.ui.navigation.AppDestinations
 import java.util.*
 
 // Helper function (place in a utility file e.g., utils/Formatters.kt)
@@ -90,9 +92,9 @@ fun TransactionListScreen(
                 .padding(paddingValues) // Apply padding from Scaffold
                 .padding(horizontal = 16.dp) // Add horizontal padding for content
         ) {
-            if (transactionsWithCategories.isNotEmpty()){
+            if (transactionsWithCategories.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
-                TransactionSummaryInfo(transactionsWithCategories.map {it.transaction})
+                TransactionSummaryInfo(transactionsWithCategories.map { it.transaction })
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
@@ -125,7 +127,9 @@ fun TransactionListScreen(
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(transactionsWithCategories, key = { it.transaction.transactionId }) { transactionWithCategory ->
+                    items(
+                        transactionsWithCategories,
+                        key = { it.transaction.transactionId }) { transactionWithCategory ->
                         TransactionItem(
                             transaction = transactionWithCategory.transaction,
                             categoryName = transactionWithCategory.categoryName,

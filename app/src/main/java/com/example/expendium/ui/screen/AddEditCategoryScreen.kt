@@ -17,13 +17,12 @@ import androidx.navigation.NavController
 import com.example.expendium.data.model.Category
 import com.example.expendium.data.model.TransactionType
 import com.example.expendium.ui.viewmodel.CategoryViewModel
-import kotlinx.coroutines.flow.firstOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddEditCategoryScreen(
     navController: NavController,
-    categoryId: Long, // -1L for new, otherwise ID of category to edit
+    categoryId: Long?, // -1L for new, otherwise ID of category to edit
     viewModel: CategoryViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()

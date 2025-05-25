@@ -8,12 +8,14 @@ import android.content.Context
 import com.example.expendium.data.dao.TransactionDao
 import com.example.expendium.data.dao.CategoryDao
 import com.example.expendium.data.dao.BudgetDao
+import com.example.expendium.data.dao.AccountDao
 import com.example.expendium.data.model.Transaction
 import com.example.expendium.data.model.Category
 import com.example.expendium.data.model.Budget
+import com.example.expendium.data.model.Account
 
 @Database(
-    entities = [Transaction::class, Category::class, Budget::class],
+    entities = [Transaction::class, Category::class, Budget::class, Account::class],
     version = 1,
     exportSchema = true
 )
@@ -23,6 +25,7 @@ abstract class ExpendiumDatabase : RoomDatabase() {
     abstract fun transactionDao(): TransactionDao
     abstract fun categoryDao(): CategoryDao
     abstract fun budgetDao(): BudgetDao
+    abstract fun accountDao(): AccountDao
 
     companion object {
         const val DATABASE_NAME = "expendium_database"

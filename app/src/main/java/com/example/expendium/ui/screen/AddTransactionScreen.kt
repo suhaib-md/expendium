@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,85 +25,89 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.example.expendium.data.DefaultDataProvider
+import com.example.expendium.data.model.Account
 import com.example.expendium.data.model.Category
-import com.example.expendium.data.model.Transaction
 import com.example.expendium.data.model.TransactionType
 import com.example.expendium.ui.viewmodel.TransactionViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Locale
 import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddTransactionScreen(
     navController: NavController,
     viewModel: TransactionViewModel = hiltViewModel(),
-    transactionId: Long // -1L for new, otherwise ID of transaction to edit
+    transactionId: Long? // Null for new, otherwise ID of transaction to edit
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    val categoriesFromDb by viewModel.categories.collectAsStateWithLifecycle() // All categories
+    val categoriesFromDb by viewModel.categories.collectAsStateWithLifecycle()
+    val accountsFromDb by viewModel.accounts.collectAsStateWithLifecycle() // Collect accounts
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val transactionToEdit by viewModel.transactionToEdit.collectAsStateWithLifecycle()
 
-    // Form state - use derivedStateOf to react to transactionToEdit or keep local if not editing
-    var amount by remember { mutableStateOf("") }
-    var merchantOrPayee by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
-    var selectedDateMillis by remember { mutableStateOf(System.currentTimeMillis()) }
-    var selectedCategory by remember { mutableStateOf<Category?>(null) }
-    var transactionType by remember { mutableStateOf(TransactionType.EXPENSE) } // Default
+    var amount by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.amount?.toString() ?: "") }
+    var merchantOrPayee by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.merchantOrPayee ?: "") }
+    var notes by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.notes ?: "") }
+    var selectedDateMillis by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.transactionDate ?: System.currentTimeMillis()) }
+    var selectedCategory by remember { mutableStateOf<Category?>(null) } // Will be populated by LaunchedEffect
+    var transactionType by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.type ?: TransactionType.EXPENSE) }
 
     val paymentModes = remember { DefaultDataProvider.getDefaultPaymentModes() }
-    var selectedPaymentMode by remember { mutableStateOf(paymentModes.firstOrNull() ?: "") }
+    var selectedPaymentMode by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.paymentMode ?: paymentModes.firstOrNull() ?: "") }
+
+    // State for selected account ID
+    var selectedAccountId by rememberSaveable(transactionToEdit) { mutableStateOf(transactionToEdit?.accountId) }
+
 
     val dateFormatter = remember { SimpleDateFormat("dd MMM, yyyy", Locale.getDefault()) }
     var showDatePicker by remember { mutableStateOf(false) }
     var categoryDropdownExpanded by remember { mutableStateOf(false) }
     var paymentModeDropdownExpanded by remember { mutableStateOf(false) }
+    var accountDropdownExpanded by remember { mutableStateOf(false) }
 
-    val screenTitle = if (transactionId != -1L && uiState.isEditing) "Edit Transaction" else "Add Transaction"
+    val screenTitle = if (transactionId != null && uiState.isEditing) "Edit Transaction" else "Add Transaction"
+
 
     // Load transaction for editing or prepare for new
     LaunchedEffect(transactionId) {
-        if (transactionId != -1L) {
+        if (transactionId != null) {
             viewModel.loadTransactionForEditing(transactionId)
         } else {
-            viewModel.prepareForNewTransaction() // Clears previous edit state and sets up for new
+            viewModel.prepareForNewTransaction()
         }
     }
 
-    // Populate fields when transactionToEdit is loaded
-    LaunchedEffect(transactionToEdit, categoriesFromDb) {
-        transactionToEdit?.let { loadedTransaction ->
+    // Populate fields when transactionToEdit is loaded or reset for new
+    LaunchedEffect(transactionToEdit, categoriesFromDb, accountsFromDb, uiState.isEditing) {
+        if (transactionToEdit != null && uiState.isEditing) { // Check isEditing flag
+            val loadedTransaction = transactionToEdit!! // Safe due to check
             amount = loadedTransaction.amount.toString()
             merchantOrPayee = loadedTransaction.merchantOrPayee
             notes = loadedTransaction.notes ?: ""
             selectedDateMillis = loadedTransaction.transactionDate
             transactionType = loadedTransaction.type
             selectedPaymentMode = loadedTransaction.paymentMode
+            selectedAccountId = loadedTransaction.accountId // Directly set the ID
 
-            // Find and set the category
-            // Ensure categoriesFromDb is not empty and has finished loading
             if (categoriesFromDb.isNotEmpty()) {
                 selectedCategory = categoriesFromDb.find { it.categoryId == loadedTransaction.categoryId }
             }
-        } ?: run {
-            // If transactionToEdit is null (either new or cleared after save/delete) reset fields
-            if (!uiState.isEditing) { // Only reset if not in the process of loading an edit
-                amount = ""
-                merchantOrPayee = ""
-                notes = ""
-                selectedDateMillis = System.currentTimeMillis()
-                selectedCategory = null
-                transactionType = TransactionType.EXPENSE // Default
-                selectedPaymentMode = paymentModes.firstOrNull() ?: ""
-            }
+        } else if (!uiState.isEditing && transactionToEdit == null) { // Reset for new or after save/delete
+            amount = ""
+            merchantOrPayee = ""
+            notes = ""
+            selectedDateMillis = System.currentTimeMillis()
+            selectedCategory = null
+            transactionType = TransactionType.EXPENSE
+            selectedPaymentMode = paymentModes.firstOrNull() ?: ""
+            selectedAccountId = null // Reset selected account ID
         }
     }
 
-    // Update selectedCategory if categoriesFromDb changes and we have a transactionToEdit (e.g. after initial load)
+    // This effect ensures category is set once categories are loaded, especially for edits
     LaunchedEffect(transactionToEdit?.categoryId, categoriesFromDb) {
         if (transactionToEdit != null && categoriesFromDb.isNotEmpty() && selectedCategory == null) {
             selectedCategory = categoriesFromDb.find { it.categoryId == transactionToEdit?.categoryId }
@@ -137,35 +142,34 @@ fun AddTransactionScreen(
                 .padding(16.dp)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp) // Slightly reduced spacing
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Amount
             OutlinedTextField(
                 value = amount,
                 onValueChange = { newValue ->
-                    if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d{0,2}\$"))) { // Allow up to 2 decimal places
+                    if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d{0,2}$"))) {
                         amount = newValue
                     }
                 },
                 label = { Text("Amount") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth(),
-                leadingIcon = { Text("₹") }, // Example currency
-                singleLine = true
+                leadingIcon = { Text("₹") },
+                singleLine = true,
+                isError = uiState.errorMessage?.contains("Amount", ignoreCase = true) == true
             )
 
-            // Merchant/Payee
             OutlinedTextField(
                 value = merchantOrPayee,
                 onValueChange = { merchantOrPayee = it },
                 label = { Text("Merchant / Payee") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                isError = uiState.errorMessage?.contains("Merchant/Payee", ignoreCase = true) == true
             )
 
-            // Date Picker
             OutlinedTextField(
-                value = dateFormatter.format(Date(selectedDateMillis)), // Use Date object
+                value = dateFormatter.format(Date(selectedDateMillis)),
                 onValueChange = {},
                 readOnly = true,
                 label = { Text("Transaction Date") },
@@ -192,7 +196,6 @@ fun AddTransactionScreen(
                     calendar.get(Calendar.MONTH),
                     calendar.get(Calendar.DAY_OF_MONTH)
                 ).apply {
-                    // datePicker.maxDate = System.currentTimeMillis() // Optional: prevent future dates
                     setOnDismissListener { showDatePicker = false }
                     show()
                 }
@@ -210,7 +213,10 @@ fun AddTransactionScreen(
                     readOnly = true,
                     label = { Text("Category") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryDropdownExpanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth(),
+                    isError = uiState.errorMessage?.contains("Category", ignoreCase = true) == true && selectedCategory == null
                 )
                 ExposedDropdownMenu(
                     expanded = categoryDropdownExpanded,
@@ -244,12 +250,14 @@ fun AddTransactionScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 OutlinedTextField(
-                    value = selectedPaymentMode,
+                    value = selectedPaymentMode.ifEmpty { "Select Payment Mode" },
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Payment Mode") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = paymentModeDropdownExpanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth()
                 )
                 ExposedDropdownMenu(
                     expanded = paymentModeDropdownExpanded,
@@ -267,7 +275,52 @@ fun AddTransactionScreen(
                 }
             }
 
-            // Transaction Type (Income/Expense)
+            // Account Dropdown
+            ExposedDropdownMenuBox(
+                expanded = accountDropdownExpanded,
+                onExpandedChange = { accountDropdownExpanded = !accountDropdownExpanded },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val selectedAccountName = accountsFromDb.find { it.accountId == selectedAccountId }?.name
+                OutlinedTextField(
+                    value = selectedAccountName ?: "Select Account",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Account") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = accountDropdownExpanded) },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth(),
+                    isError = uiState.errorMessage?.contains("Account", ignoreCase = true) == true && selectedAccountId == null
+                )
+                ExposedDropdownMenu(
+                    expanded = accountDropdownExpanded,
+                    onDismissRequest = { accountDropdownExpanded = false }
+                ) {
+                    if (accountsFromDb.isEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text("No accounts available. Add one first.") },
+                            onClick = { accountDropdownExpanded = false /* Optionally navigate */ },
+                            enabled = false // Consider true if you want to navigate
+                        )
+                    } else {
+                        accountsFromDb.forEach { account ->
+                            DropdownMenuItem(
+                                text = { Text(account.name) },
+                                onClick = {
+                                    selectedAccountId = account.accountId
+                                    accountDropdownExpanded = false
+                                    if (uiState.errorMessage?.contains("Account", ignoreCase = true) == true) {
+                                        viewModel.clearError() // Clear error if user selects an account
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -296,7 +349,6 @@ fun AddTransactionScreen(
                 )
             }
 
-            // Notes
             OutlinedTextField(
                 value = notes,
                 onValueChange = { notes = it },
@@ -306,28 +358,27 @@ fun AddTransactionScreen(
                 maxLines = 5
             )
 
-            Spacer(modifier = Modifier.weight(1f, fill = false)) // Pushes button to bottom
+            Spacer(modifier = Modifier.weight(1f, fill = false))
 
-            // Save Button
             Button(
                 onClick = {
-                    keyboardController?.hide() // Hide keyboard before processing
+                    keyboardController?.hide()
                     val amountDouble = amount.toDoubleOrNull()
 
                     val success = viewModel.saveTransaction(
-                        transactionIdToUpdate = if (transactionId != -1L) transactionId else null,
-                        amount = amountDouble ?: 0.0, // Let ViewModel handle amount validation
+                        transactionIdToUpdate = transactionId, // Pass directly, VM handles null or ID
+                        amount = amountDouble ?: 0.0,
                         merchantOrPayee = merchantOrPayee,
                         categoryId = selectedCategory?.categoryId,
                         paymentMode = selectedPaymentMode,
                         notes = notes.takeIf { it.isNotBlank() },
                         transactionDate = selectedDateMillis,
-                        type = transactionType
+                        type = transactionType,
+                        accountId = selectedAccountId // Pass the selected account ID (Long?)
                     )
                     if (success) {
                         navController.popBackStack()
                     }
-                    // Error message will be shown by the LaunchedEffect observing uiState.errorMessage
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !uiState.isLoading
@@ -335,7 +386,7 @@ fun AddTransactionScreen(
                 if (uiState.isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text(if (transactionId != -1L && uiState.isEditing) "Update Transaction" else "Save Transaction")
+                    Text(if (transactionId != null && uiState.isEditing) "Update Transaction" else "Save Transaction")
                 }
             }
         }
