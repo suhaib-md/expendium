@@ -7,11 +7,14 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AccountBalanceWallet // Example icon for Accounts
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
@@ -22,7 +25,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
-import com.example.expendium.ui.navigation.navigateToAccountList // Import the navigation helper
+import com.example.expendium.ui.navigation.navigateToAccountList
+import com.example.expendium.services.TransactionNotificationListener
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,13 +34,23 @@ fun SettingsScreen(navController: NavController) {
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("AppSettings", Context.MODE_PRIVATE) }
 
+    // SMS Permission states
     var systemSmsPermissionGranted by remember {
         mutableStateOf(hasSmsPermissions(context))
     }
     var userPrefSmsParsingEnabled by remember {
         mutableStateOf(sharedPrefs.getBoolean("isSmsParsingEnabled", true))
     }
-    var showPermissionDialog by remember { mutableStateOf(false) }
+    var showSmsPermissionDialog by remember { mutableStateOf(false) }
+
+    // Notification Access states
+    var notificationAccessGranted by remember {
+        mutableStateOf(TransactionNotificationListener.isNotificationListenerEnabled(context))
+    }
+    var userPrefNotificationParsingEnabled by remember {
+        mutableStateOf(sharedPrefs.getBoolean("isNotificationParsingEnabled", true))
+    }
+    var showNotificationPermissionDialog by remember { mutableStateOf(false) }
 
     val requestSmsPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -50,19 +64,46 @@ fun SettingsScreen(navController: NavController) {
         } else {
             userPrefSmsParsingEnabled = false
             sharedPrefs.edit().putBoolean("isSmsParsingEnabled", false).apply()
-            showPermissionDialog = true
+            showSmsPermissionDialog = true
         }
     }
 
     val isSmsParsingEffectivelyEnabled = systemSmsPermissionGranted && userPrefSmsParsingEnabled
+    val isNotificationParsingEffectivelyEnabled = notificationAccessGranted && userPrefNotificationParsingEnabled
 
-    if (showPermissionDialog) {
+    // Refresh notification access status when screen becomes visible
+    LaunchedEffect(Unit) {
+        notificationAccessGranted = TransactionNotificationListener.isNotificationListenerEnabled(context)
+    }
+
+    // SMS Permission Dialog
+    if (showSmsPermissionDialog) {
         AlertDialog(
-            onDismissRequest = { showPermissionDialog = false },
+            onDismissRequest = { showSmsPermissionDialog = false },
             title = { Text("SMS Permission Required") },
             text = { Text("To automatically detect transactions from SMS, please grant SMS permissions. If you've denied them, you can grant them from the app settings.") },
             confirmButton = {
-                TextButton(onClick = { showPermissionDialog = false }) { Text("OK") }
+                TextButton(onClick = { showSmsPermissionDialog = false }) { Text("OK") }
+            }
+        )
+    }
+
+    // Notification Access Dialog
+    if (showNotificationPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotificationPermissionDialog = false },
+            title = { Text("Notification Access Required") },
+            text = { Text("To read RCS messages and app notifications for transaction detection, please enable notification access in the system settings.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        TransactionNotificationListener.openNotificationListenerSettings(context)
+                        showNotificationPermissionDialog = false
+                    }
+                ) { Text("Open Settings") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNotificationPermissionDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -83,14 +124,17 @@ fun SettingsScreen(navController: NavController) {
             modifier = Modifier
                 .padding(paddingValues)
                 .padding(16.dp)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // SMS Transaction Parsing Section
+            // Transaction Detection Section
             Text(
-                "SMS Transaction Parsing",
+                "Transaction Detection",
                 style = MaterialTheme.typography.titleMedium
             )
+
+            // SMS Transaction Parsing
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -101,7 +145,14 @@ fun SettingsScreen(navController: NavController) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Enable SMS Parsing")
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("SMS Parsing")
+                            Text(
+                                "Detect transactions from SMS messages",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Switch(
                             checked = isSmsParsingEffectivelyEnabled,
                             onCheckedChange = { isChecked ->
@@ -141,7 +192,7 @@ fun SettingsScreen(navController: NavController) {
                         }
                         else -> {
                             Text(
-                                "SMS parsing is currently disabled by you. Toggle the switch to enable.",
+                                "SMS parsing is currently disabled. Toggle the switch to enable.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -149,16 +200,113 @@ fun SettingsScreen(navController: NavController) {
                     }
                 }
             }
-            if (isSmsParsingEffectivelyEnabled) {
+
+            // Notification/RCS Parsing
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Notification Parsing")
+                            Text(
+                                "Detect transactions from RCS messages and app notifications",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = isNotificationParsingEffectivelyEnabled,
+                            onCheckedChange = { isChecked ->
+                                if (isChecked) {
+                                    if (!notificationAccessGranted) {
+                                        showNotificationPermissionDialog = true
+                                    } else {
+                                        userPrefNotificationParsingEnabled = true
+                                        sharedPrefs.edit().putBoolean("isNotificationParsingEnabled", true).apply()
+                                    }
+                                } else {
+                                    userPrefNotificationParsingEnabled = false
+                                    sharedPrefs.edit().putBoolean("isNotificationParsingEnabled", false).apply()
+                                }
+                            }
+                        )
+                    }
+                    when {
+                        !notificationAccessGranted -> {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Grant notification access to read RCS messages and app notifications for transaction detection.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        TransactionNotificationListener.openNotificationListenerSettings(context)
+                                    },
+                                    modifier = Modifier.wrapContentSize()
+                                ) {
+                                    Icon(
+                                        Icons.Default.Notifications,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Grant Access", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                        isNotificationParsingEffectivelyEnabled -> {
+                            Text(
+                                "✓ Notification parsing is active. RCS messages and app notifications will be monitored for transactions.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        else -> {
+                            Text(
+                                "Notification parsing is currently disabled. Toggle the switch to enable.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // How it works section
+            if (isSmsParsingEffectivelyEnabled || isNotificationParsingEffectivelyEnabled) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("How it works:", style = MaterialTheme.typography.titleSmall)
+                        Text("How Transaction Detection Works:", style = MaterialTheme.typography.titleSmall)
                         Spacer(modifier = Modifier.height(8.dp))
+
+                        val features = buildList {
+                            if (isSmsParsingEffectivelyEnabled) {
+                                add("• SMS messages are monitored for transaction keywords")
+                            }
+                            if (isNotificationParsingEffectivelyEnabled) {
+                                add("• RCS messages through messaging apps are detected")
+                                add("• Banking app notifications are captured")
+                                add("• Payment app notifications (PhonePe, GPay, Paytm, etc.) are processed")
+                            }
+                            add("• Transaction details are automatically extracted and saved")
+                            add("• Check Logcat for 'SmsReceiver', 'TransactionNotificationListener', and 'SmsProcessingWorker' messages during testing")
+                        }
+
                         Text(
-                            "• The app monitors incoming SMS messages.\n" +
-                                    "• If SMS parsing is enabled and permissions are granted, potential transaction messages are processed.\n" +
-                                    "• Transaction details are extracted and saved to your records.\n" +
-                                    "• Check Logcat for 'SmsReceiver' and 'SmsProcessingWorker' messages during testing.",
+                            features.joinToString("\n"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -166,10 +314,10 @@ fun SettingsScreen(navController: NavController) {
                 }
             }
 
-            // Divider or Spacer
+            // Divider
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // Account Management Section - NEW
+            // Account Management Section
             Text(
                 "Account Management",
                 style = MaterialTheme.typography.titleMedium
@@ -177,8 +325,8 @@ fun SettingsScreen(navController: NavController) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { navController.navigateToAccountList() }, // Navigate on click
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp) // Optional: add some elevation
+                    .clickable { navController.navigateToAccountList() },
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -205,13 +353,11 @@ fun SettingsScreen(navController: NavController) {
                     )
                 }
             }
-
-            // ... (any other settings options can go here)
         }
     }
 }
 
-// hasSmsPermissions function remains the same
+// Helper function remains the same
 fun hasSmsPermissions(context: Context): Boolean {
     return ContextCompat.checkSelfPermission(
         context,

@@ -133,12 +133,13 @@ class SmsProcessingWorker @AssistedInject constructor(
 
         // Enhanced transaction type detection with more patterns
         val type: TransactionType = when {
-            // DEBIT/EXPENSE patterns - comprehensive
+            // DEBIT/EXPENSE patterns - comprehensive (including "sent")
             listOf(
                 "debit:", "debited", "spent", "paid", "payment to", "withdrawal",
                 "purchase", "txn at", "transaction at", "bought", "transferred to",
-                "sent to", "dr ", "dr.", "withdrawal from", "paid to", "outgoing",
-                "deducted", "charged", "bill payment", "emi", "autopay"
+                "sent to", "sent rs", "sent inr", "sent ₹", "dr ", "dr.", "withdrawal from",
+                "paid to", "outgoing", "deducted", "charged", "bill payment", "emi",
+                "autopay", "money sent", "amount sent", "transferred", "send money"
             ).any { lowerBody.contains(it) } -> TransactionType.EXPENSE
 
             // CREDIT/INCOME patterns - comprehensive
@@ -146,7 +147,8 @@ class SmsProcessingWorker @AssistedInject constructor(
                 "credit:", "credited", "received", "deposited", "payment from",
                 "refund", "cashback", "interest", "salary", "cr ", "cr.",
                 "received from", "transferred from", "deposit", "incoming",
-                "added", "bonus", "reward", "dividend", "commission"
+                "added", "bonus", "reward", "dividend", "commission", "money received",
+                "amount received"
             ).any { lowerBody.contains(it) } -> TransactionType.INCOME
 
             else -> {
@@ -222,11 +224,17 @@ class SmsProcessingWorker @AssistedInject constructor(
     private fun extractMerchant(messageBody: String, sender: String, type: TransactionType): String {
         var merchant = "Unknown/SMS"
 
-        // Enhanced merchant patterns based on transaction type and common formats
+        // Enhanced merchant patterns for RCS/notification messages
         val merchantPatterns = listOf(
+            // RCS-specific patterns (for messages like "To IITMRP ACCT FULFILL FOODS")
+            """(?:to|paid to|sent to)\s+([A-Z][A-Z0-9\s]+[A-Z])(?:\s*on|\s*ref|\s*$)""".toRegex(RegexOption.IGNORE_CASE),
+
             // UPI patterns - most common
             """UPI/[^/]+/([^/]+)/([A-Za-z0-9\s.&'@*#-]+?)(?:\s|/|$)""".toRegex(RegexOption.IGNORE_CASE),
             """UPI\s*(?:to|payment to|from)\s*([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:ref|txn|/|\s*$))""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Account-based patterns (like "IITMRP ACCT FULFILL FOODS")
+            """(?:ACCT|ACCOUNT)\s+([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:on|ref|txn|\s*$))""".toRegex(RegexOption.IGNORE_CASE),
 
             // Direct payment patterns
             """(?:to|paid to|sent to|purchase at|spent at|payment to|debited for|txn at|transaction at)\s+([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:\.|on|avbl|avl|bal|for|ref|txnid|upi|vpa|ac|card|ending|-)|\s*$)""".toRegex(RegexOption.IGNORE_CASE),
@@ -275,9 +283,10 @@ class SmsProcessingWorker @AssistedInject constructor(
             }
         }
 
-        // Fallback to cleaned sender if merchant is still unknown
-        if (merchant == "Unknown/SMS" && !isGenericBankSender(sender.lowercase(Locale.ROOT))) {
-            merchant = cleanSenderName(sender)
+        // For RCS/notification messages, don't use sender name as fallback
+        // since it's often the contact name, not the actual merchant
+        if (merchant == "Unknown/SMS") {
+            merchant = "Unknown"
         }
 
         return merchant
@@ -488,7 +497,7 @@ class SmsProcessingWorker @AssistedInject constructor(
 
                 // Shopping
                 listOf("amazon", "flipkart", "myntra", "ajio", "shopping", "mall",
-                    "store", "mart", "bazaar").any {
+                    "store", "mart", "bazaar", "zepto").any {
                     lowerMerchant.contains(it) || lowerBody.contains(it)
                 } -> return null // Replace with shopping category ID
 
