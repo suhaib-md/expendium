@@ -13,6 +13,7 @@ import com.example.expendium.data.repository.TransactionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.firstOrNull
 import javax.inject.Inject
 
 // Data class to combine Transaction with its Category Name for easier UI display
@@ -157,10 +158,32 @@ class TransactionViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
+                // Fetch the CURRENT state of the account. Use the non-Flow version from AccountRepository.
+                val currentAccountState = accountRepository.getAccountByIdStatic(accountId) // Use Static version
+                if (currentAccountState == null) {
+                    _uiState.update { it.copy(isLoading = false, errorMessage = "Selected account not found.") }
+                    return@launch
+                }
+
                 if (transactionIdToUpdate != null && transactionIdToUpdate != -1L) {
-                    // Update existing transaction
-                    val existingTransaction = _transactionToEdit.value
-                    if (existingTransaction != null && existingTransaction.transactionId == transactionIdToUpdate) {
+                    // --- UPDATE EXISTING TRANSACTION ---
+                    // Fetch the original transaction to get its old amount and type for balance adjustment
+                    val existingTransaction = transactionRepository.getTransactionByIdStatic(transactionIdToUpdate) // Use Static version
+
+                    if (existingTransaction != null) {
+                        // IMPORTANT: Handle if the account itself was changed during the edit
+                        if (existingTransaction.accountId != accountId) {
+                            // This is the complex case:
+                            // 1. Revert from OLD account (existingTransaction.accountId)
+                            // 2. Apply to NEW account (accountId)
+                            // For now, showing an error or you can implement this detailed logic.
+                            _uiState.update { it.copy(isLoading = false, errorMessage = "Changing account during edit requires more complex balance adjustment (not yet fully implemented).") }
+                            return@launch // Or proceed with a simpler update if this is acceptable
+                        }
+
+                        val oldAmountForUpdate = existingTransaction.amount
+                        val oldTypeForUpdate = existingTransaction.type
+
                         val updatedTransaction = existingTransaction.copy(
                             amount = amount,
                             merchantOrPayee = merchantOrPayee,
@@ -170,16 +193,23 @@ class TransactionViewModel @Inject constructor(
                             transactionDate = transactionDate,
                             type = type,
                             updatedAt = System.currentTimeMillis(),
-                            accountId = accountId // Ensure accountId is passed for update
+                            accountId = accountId // Ensure this is the potentially new accountId
                         )
-                        transactionRepository.updateTransaction(updatedTransaction)
+                        transactionRepository.updateTransactionAndUpdateAccountBalance(
+                            updatedTransaction,
+                            currentAccountState, // Pass the fetched current state of the account
+                            oldAmountForUpdate,
+                            oldTypeForUpdate
+                        )
+                        _transactionToEdit.value = updatedTransaction
                     } else {
                         _uiState.update { it.copy(isLoading = false, errorMessage = "Error: Transaction to update not found.") }
                         return@launch
                     }
                 } else {
-                    // Add new transaction
-                    val transaction = Transaction(
+                    // --- ADD NEW TRANSACTION ---
+                    val newTransaction = Transaction(
+                        // transactionId is auto-generated
                         amount = amount,
                         transactionDate = transactionDate,
                         type = type,
@@ -187,20 +217,24 @@ class TransactionViewModel @Inject constructor(
                         merchantOrPayee = merchantOrPayee,
                         notes = notes,
                         paymentMode = paymentMode,
-                        isManual = true, // Assuming manual entry
-                        accountId = accountId // accountId is now correctly passed
+                        isManual = true, // Assuming
+                        accountId = accountId
+                        // createdAt and updatedAt are typically set by default in the model or DB
                     )
-                    transactionRepository.insertTransaction(transaction)
+                    transactionRepository.insertTransactionAndUpdateAccountBalance(
+                        newTransaction,
+                        currentAccountState // Pass the fetched current state of the account
+                    )
                 }
                 _uiState.update { it.copy(isLoading = false, errorMessage = null, isEditing = false) }
-                _transactionToEdit.value = null // Clear after saving
+                _transactionToEdit.value = null
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(isLoading = false, errorMessage = e.message ?: "Failed to save transaction")
+                    it.copy(isLoading = false, errorMessage = e.message ?: "Failed to save transaction.")
                 }
             }
         }
-        return _uiState.value.errorMessage == null // Success if no error was set
+        return _uiState.value.errorMessage == null // Check if error was set
     }
 
 
@@ -208,7 +242,32 @@ class TransactionViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
-                transactionRepository.deleteTransactionById(transactionId)
+                // Fetch the transaction to be deleted
+                val transactionToDelete = transactionRepository.getTransactionByIdStatic(transactionId) // Use static version
+                if (transactionToDelete == null) {
+                    _uiState.update { it.copy(isLoading = false, errorMessage = "Transaction not found for deletion.") }
+                    return@launch
+                }
+                if (transactionToDelete.accountId == null) {
+                    // If accountId is nullable and can be null, just delete the transaction without balance update
+                    transactionRepository.deleteTransaction(transactionToDelete) // Or deleteTransactionById
+                    _uiState.update { it.copy(isLoading = false, errorMessage = "Transaction deleted (no account associated).") }
+                    return@launch
+                }
+
+                // Fetch the current state of the associated account
+                val currentAccountState = accountRepository.getAccountByIdStatic(transactionToDelete.accountId)
+                if (currentAccountState == null) {
+                    // Account associated with transaction not found.
+                    // Decide: Delete transaction anyway, or show error?
+                    // For now, let's show an error and not delete.
+                    _uiState.update { it.copy(isLoading = false, errorMessage = "Associated account not found. Cannot update balance.") }
+                    return@launch
+                }
+
+                transactionRepository.deleteTransactionAndUpdateAccountBalance(transactionToDelete, currentAccountState)
+
+                // ... (rest of your cleanup logic for _selectedTransactionDetail, _transactionToEdit)
                 if (_selectedTransactionDetail.value?.transactionId == transactionId) {
                     clearSelectedTransactionDetails()
                 }
@@ -217,9 +276,10 @@ class TransactionViewModel @Inject constructor(
                     _uiState.update { it.copy(isEditing = false) }
                 }
                 _uiState.update { it.copy(isLoading = false, errorMessage = null) }
+
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(isLoading = false, errorMessage = e.message ?: "Failed to delete transaction")
+                    it.copy(isLoading = false, errorMessage = e.message ?: "Failed to delete transaction.")
                 }
             }
         }

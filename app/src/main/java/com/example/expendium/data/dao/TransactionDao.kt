@@ -15,6 +15,10 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE transactionId = :transactionId")
     fun getTransactionById(transactionId: Long?): Flow<Transaction?> // Can be nullable if ID not found
 
+    // Adding a non-Flow version to get a transaction by ID, useful in repositories
+    @Query("SELECT * FROM transactions WHERE transactionId = :transactionId")
+    suspend fun getTransactionByIdStatic(transactionId: Long?): Transaction?
+
     @Query("SELECT * FROM transactions WHERE transactionDate BETWEEN :startDate AND :endDate ORDER BY transactionDate DESC")
     fun getTransactionsByDateRange(startDate: Long, endDate: Long): Flow<List<Transaction>>
 
@@ -44,6 +48,16 @@ interface TransactionDao {
 
     @Query("DELETE FROM transactions WHERE transactionId = :id")
     suspend fun deleteTransactionById(id: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(transaction: Transaction): Long
+
+    @Update
+    suspend fun update(transaction: Transaction)
+
+    @Delete
+    suspend fun delete(transaction: Transaction)
+
 }
 
 
