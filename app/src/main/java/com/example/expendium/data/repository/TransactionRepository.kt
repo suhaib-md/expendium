@@ -51,6 +51,46 @@ class TransactionRepository @Inject constructor(
     suspend fun deleteTransaction(transaction: Transaction) = transactionDao.delete(transaction)
     suspend fun deleteTransactionById(id: Long) = transactionDao.deleteTransactionById(id)
 
+    // NEW METHODS FOR TIME RANGE QUERIES AND DUPLICATE DETECTION
+
+    /**
+     * Get transactions within a specific time range for duplicate detection
+     */
+    suspend fun getTransactionsInTimeRange(startTime: Long, endTime: Long): List<Transaction> {
+        return transactionDao.getTransactionsInTimeRange(startTime, endTime)
+    }
+
+    /**
+     * Get recent transactions by sender for duplicate detection and account determination
+     * @param sender The SMS sender to filter by
+     * @param limit Maximum number of transactions to return
+     * @return List of recent transactions from the specified sender
+     */
+    suspend fun getRecentTransactionsBySender(sender: String, limit: Int): List<Transaction> {
+        return transactionDao.getRecentTransactionsBySender(sender, limit)
+    }
+
+    /**
+     * Check if a transaction with similar characteristics exists
+     */
+    suspend fun findSimilarTransaction(
+        amount: Double,
+        type: TransactionType,
+        timeWindow: Long,
+        amountTolerance: Double = 0.01
+    ): Transaction? {
+        val currentTime = System.currentTimeMillis()
+        val startTime = currentTime - timeWindow
+        val endTime = currentTime + timeWindow
+
+        return transactionDao.findSimilarTransaction(
+            minAmount = amount - amountTolerance,
+            maxAmount = amount + amountTolerance,
+            type = type,
+            startTime = startTime,
+            endTime = endTime
+        )
+    }
 
     // --- Combined Operations ---
     // These methods will now call TransactionDao and AccountDao sequentially.

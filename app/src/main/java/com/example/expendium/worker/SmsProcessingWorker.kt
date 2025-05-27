@@ -11,6 +11,7 @@ import com.example.expendium.data.model.Transaction
 import com.example.expendium.data.model.TransactionType
 import com.example.expendium.data.repository.AccountRepository
 import com.example.expendium.data.repository.TransactionRepository
+import com.example.expendium.utils.DuplicateDetectionManager
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +26,8 @@ class SmsProcessingWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val transactionRepository: TransactionRepository,
-    private val accountRepository: AccountRepository
+    private val accountRepository: AccountRepository,
+    private val duplicateDetectionManager: DuplicateDetectionManager
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -34,12 +36,58 @@ class SmsProcessingWorker @AssistedInject constructor(
         const val KEY_BODY = "BODY"
         const val KEY_TIMESTAMP = "TIMESTAMP"
 
-        // Bank sender patterns for better recognition
-        private val BANK_SENDER_PATTERNS = listOf(
-            "vm-", "bp-", "ax-", "ad-", "tm-", "jk-", "sb-", "hdfcbk", "icicib",
-            "axisbk", "kotakbk", "sbimb", "pnbsms", "unionbk", "canarabk", "bobsms",
-            "idbibank", "yesbank", "rblbank", "indusbk", "denabank", "federal",
-            "paytm", "phonepe", "gpay", "bhim", "amazonpay", "mobikwik", "freecharge"
+        // Enhanced bank sender patterns for better recognition
+        private val TRUSTED_BANK_SENDERS = listOf(
+            "vm-hdfcbk", "bp-hdfcbk", "hdfcbk", "hdfc bank",
+            "vm-icicib", "bp-icicib", "icicibk", "icici bank",
+            "vm-axisbk", "bp-axisbk", "axisbk", "axis bank",
+            "vm-kotakbk", "bp-kotakbk", "kotakbk", "kotak bank",
+            "vm-sbimb", "bp-sbimb", "sbimb", "sbi bank", "sbiinb",
+            "vm-pnbsms", "bp-pnbsms", "pnbsms", "pnb bank",
+            "vm-unionbk", "bp-unionbk", "unionbk", "union bank",
+            "vm-canarabk", "bp-canarabk", "canarabk", "canara bank",
+            "vm-bobsms", "bp-bobsms", "bobsms", "bank of baroda",
+            "vm-idbibank", "bp-idbibank", "idbibank", "idbi bank",
+            "vm-yesbank", "bp-yesbank", "yesbank", "yes bank",
+            "vm-rblbank", "bp-rblbank", "rblbank", "rbl bank",
+            "vm-indusbk", "bp-indusbk", "indusbk", "indusind bank",
+            "vm-federal", "bp-federal", "federal", "federal bank",
+            "majeed bhaiya"
+        )
+
+        // UPI and payment app senders
+        private val TRUSTED_PAYMENT_SENDERS = listOf(
+            "paytm", "phonepe", "gpay", "googlepay", "bhim", "amazonpay",
+            "mobikwik", "freecharge", "payzapp", "airtel money"
+        )
+
+        // Promotional keywords that indicate non-transactional messages
+        private val PROMOTIONAL_KEYWORDS = listOf(
+            "offer", "discount", "cashback offer", "reward points", "scheme",
+            "free", "special offer", "limited time", "hurry", "expires",
+            "activate now", "click here", "visit", "download", "install",
+            "upgrade", "new feature", "congratulations", "winner", "prize",
+            "lottery", "lucky", "bonus offer", "gift", "voucher available",
+            "promocode", "coupon", "deal", "sale", "% off", "₹ off",
+            "minimum transaction", "cashback upto", "get upto", "earn upto",
+            "validity", "t&c apply", "terms and conditions", "promo",
+            "advertisement", "marketing", "campaign", "festive offer",
+            "holiday offer", "season sale", "mega sale", "flash sale",
+            "exclusive offer", "member offer", "invitation", "join now",
+            "register now", "sign up", "subscription", "plan", "package",
+            "service update", "maintenance", "scheduled", "temporarily",
+            "unavailable", "disruption", "notice", "announcement",
+            "reminder", "due date", "expiry", "renewal", "auto renewal",
+            "setup autopay", "enable autopay", "upi autopay", "mandate",
+            "standing instruction", "si", "ecs", "nach", "auto debit",
+            "bill reminder", "payment reminder", "overdue", "late fee",
+            "penalty", "charges applicable"
+        )
+
+        // Spam/promotional patterns in sender names
+        private val SPAM_SENDER_PATTERNS = listOf(
+            "promo", "offer", "deals", "sale", "marketing", "ads",
+            "notify", "alert" // Generic alert senders are often promotional
         )
     }
 
@@ -55,6 +103,18 @@ class SmsProcessingWorker @AssistedInject constructor(
 
         Log.i(TAG, "Worker processing SMS from $sender (Timestamp: $timestamp): $messageBody")
 
+        // FIRST: Check if this is a promotional/spam message
+        if (isPromotionalMessage(sender, messageBody)) {
+            Log.i(TAG, "🚫 Promotional/spam message detected. Skipping processing.")
+            return@withContext Result.success()
+        }
+
+        // SECOND: Validate if sender is from trusted source (UPDATED)
+        if (!isTrustedSender(sender, messageBody)) {
+            Log.i(TAG, "🚫 Untrusted sender detected. Skipping processing.")
+            return@withContext Result.success()
+        }
+
         // Generate SMS hash for duplicate detection
         val smsHash = generateSmsHash(sender, messageBody, timestamp)
 
@@ -69,6 +129,18 @@ class SmsProcessingWorker @AssistedInject constructor(
 
             if (parsedDetails != null) {
                 val (amount, type, merchant, notesFromParser, paymentMode, accountHint) = parsedDetails
+
+                // THIRD: Additional validation - check if this looks like a real transaction
+                if (!isValidTransaction(messageBody, amount, type)) {
+                    Log.i(TAG, "🚫 Invalid transaction pattern detected. Skipping.")
+                    return@withContext Result.success()
+                }
+
+                // Enhanced duplicate detection using DuplicateDetectionManager
+                if (duplicateDetectionManager.isDuplicateTransaction(amount, type, timestamp, sender, messageBody)) {
+                    Log.i(TAG, "⚠️ Duplicate transaction detected by DuplicateDetectionManager. Skipping to avoid double entry.")
+                    return@withContext Result.success()
+                }
 
                 // Determine the account
                 val targetAccount = determineAccount(messageBody, sender, accountHint)
@@ -104,8 +176,14 @@ class SmsProcessingWorker @AssistedInject constructor(
                     Log.i(TAG, "✅ Transaction from SMS saved (no account link). Merchant: $merchant")
                 }
 
+                // Record transaction for duplicate detection using DuplicateDetectionManager
+                duplicateDetectionManager.recordTransaction(amount, type, timestamp, sender, messageBody)
+
                 // Mark as processed
                 markAsProcessed(smsHash)
+
+                // Cleanup old entries periodically
+                duplicateDetectionManager.cleanupOldEntries()
 
                 Result.success()
             } else {
@@ -118,6 +196,223 @@ class SmsProcessingWorker @AssistedInject constructor(
         }
     }
 
+    /**
+     * Enhanced promotional message detection
+     */
+    private fun isPromotionalMessage(sender: String, messageBody: String): Boolean {
+        val lowerSender = sender.lowercase(Locale.ROOT)
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
+
+        // Check for spam sender patterns
+        if (SPAM_SENDER_PATTERNS.any { lowerSender.contains(it) }) {
+            Log.d(TAG, "Spam sender pattern detected in: $sender")
+            return true
+        }
+
+        // Count promotional keywords
+        val promoKeywordCount = PROMOTIONAL_KEYWORDS.count { keyword ->
+            lowerBody.contains(keyword)
+        }
+
+        // If message contains multiple promotional keywords, it's likely promotional
+        if (promoKeywordCount >= 2) {
+            Log.d(TAG, "Multiple promotional keywords detected ($promoKeywordCount): $messageBody")
+            return true
+        }
+
+        // Specific patterns that indicate promotional content
+        val promoPatterns = listOf(
+            // URLs and links
+            """https?://[^\s]+""".toRegex(),
+            """www\.[^\s]+""".toRegex(),
+            """[a-z0-9]+\.in/[^\s]+""".toRegex(),
+
+            // Click/action prompts
+            """click here""".toRegex(RegexOption.IGNORE_CASE),
+            """tap here""".toRegex(RegexOption.IGNORE_CASE),
+            """visit [^\s]+""".toRegex(RegexOption.IGNORE_CASE),
+            """download [^\s]+""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Promotional language
+            """get \d+% (off|cashback)""".toRegex(RegexOption.IGNORE_CASE),
+            """upto .*% off""".toRegex(RegexOption.IGNORE_CASE),
+            """minimum .*₹\d+""".toRegex(RegexOption.IGNORE_CASE),
+            """valid (till|until)""".toRegex(RegexOption.IGNORE_CASE),
+            """offer expires""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Setup/activation prompts (like your Hathway example)
+            """set up .* in \d+ click""".toRegex(RegexOption.IGNORE_CASE),
+            """activate now""".toRegex(RegexOption.IGNORE_CASE),
+            """ac no \d+""".toRegex(RegexOption.IGNORE_CASE), // Account number for service activation
+
+            // Service-related promotional messages
+            """don't let .* stop""".toRegex(RegexOption.IGNORE_CASE),
+            """enjoy uninterrupted""".toRegex(RegexOption.IGNORE_CASE),
+            """prepaid pack at just""".toRegex(RegexOption.IGNORE_CASE)
+        )
+
+        for (pattern in promoPatterns) {
+            if (pattern.containsMatchIn(lowerBody)) {
+                Log.d(TAG, "Promotional pattern detected: ${pattern.pattern}")
+                return true
+            }
+        }
+
+        // Check for service activation messages (like Jio prepaid pack)
+        if (lowerBody.contains("prepaid pack") && lowerBody.contains("just ₹")) {
+            Log.d(TAG, "Service promotional message detected")
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * Check if sender is from trusted source
+     */
+    private fun isTrustedSender(sender: String, messageBody: String): Boolean {
+        val lowerSender = sender.lowercase(Locale.ROOT)
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
+
+        // Check against trusted bank senders (original logic)
+        val isTrustedBank = TRUSTED_BANK_SENDERS.any { trustedSender ->
+            lowerSender.contains(trustedSender) ||
+                    lowerSender == trustedSender ||
+                    lowerSender.startsWith(trustedSender)
+        }
+
+        // Check against trusted payment app senders (original logic)
+        val isTrustedPayment = TRUSTED_PAYMENT_SENDERS.any { trustedSender ->
+            lowerSender.contains(trustedSender) ||
+                    lowerSender == trustedSender
+        }
+
+        // NEW: Content-based trust detection for forwarded/contact SMS
+        val hasValidBankContent = hasValidBankTransactionContent(lowerBody)
+
+        val isTrusted = isTrustedBank || isTrustedPayment || hasValidBankContent
+
+        Log.d(TAG, "Sender trust check - $sender: ${if (isTrusted) "TRUSTED" else "UNTRUSTED"}")
+        if (hasValidBankContent && !isTrustedBank && !isTrustedPayment) {
+            Log.d(TAG, "Trusted based on valid bank content in message body")
+        }
+
+        return isTrusted
+    }
+
+    /**
+     * Check if message content indicates a legitimate bank transaction
+     */
+    private fun hasValidBankTransactionContent(messageBody: String): Boolean {
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
+
+        // Must have bank identifier in content
+        val bankContentPatterns = listOf(
+            "from hdfc bank", "from icici bank", "from axis bank", "from sbi bank",
+            "from kotak bank", "from yes bank", "from rbl bank", "from pnb bank",
+            "hdfc bank a/c", "icici bank a/c", "axis bank a/c", "sbi a/c",
+            "kotak a/c", "yes bank a/c", "rbl bank a/c", "pnb a/c",
+            "state bank of india", "punjab national bank", "canara bank",
+            "bank of baroda", "union bank", "federal bank", "indusind bank"
+        )
+
+        val hasBankIdentifier = bankContentPatterns.any { pattern ->
+            lowerBody.contains(pattern)
+        }
+
+        if (!hasBankIdentifier) {
+            return false
+        }
+
+        // Must have transaction indicators
+        val transactionIndicators = listOf(
+            "sent rs", "sent inr", "sent ₹", "debited", "credited",
+            "payment to", "payment from", "transferred to", "transferred from",
+            "upi", "imps", "neft", "rtgs", "transaction", "txn"
+        )
+
+        val hasTransactionIndicator = transactionIndicators.any { indicator ->
+            lowerBody.contains(indicator)
+        }
+
+        if (!hasTransactionIndicator) {
+            return false
+        }
+
+        // Must have reference number (indicates genuine bank SMS)
+        val hasRefNumber = lowerBody.contains("ref") &&
+                Regex("""ref\s*\d+""").containsMatchIn(lowerBody)
+
+        // Must have account number pattern
+        val hasAccountPattern = Regex("""a/c\s*[*x]*\d{3,6}""").containsMatchIn(lowerBody)
+
+        // Must have amount pattern
+        val hasAmountPattern = Regex("""rs\.?\s*\d+(\.\d{2})?""").containsMatchIn(lowerBody)
+
+        val isValidBankTransaction = hasRefNumber && hasAccountPattern && hasAmountPattern
+
+        Log.d(TAG, "Bank content validation - Bank ID: $hasBankIdentifier, " +
+                "Transaction: $hasTransactionIndicator, Ref: $hasRefNumber, " +
+                "Account: $hasAccountPattern, Amount: $hasAmountPattern")
+
+        return isValidBankTransaction
+    }
+
+    /**
+     * Additional validation to ensure this is a real transaction
+     */
+
+    private fun isValidTransaction(messageBody: String, amount: Double, type: TransactionType): Boolean {
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
+
+        // Must contain clear transaction indicators
+        val transactionIndicators = listOf(
+            // Debit indicators
+            "debited", "debit alert", "spent", "paid", "withdrawal",
+            "purchase", "txn at", "transaction at", "transferred to",
+            "payment to", "sent to", "dr ", "dr.", "sent",
+
+            // Credit indicators
+            "credited", "credit alert", "received", "deposited",
+            "payment from", "transferred from", "refund", "cashback",
+            "cr ", "cr.", "salary"
+        )
+
+        val hasTransactionIndicator = transactionIndicators.any { indicator ->
+            lowerBody.contains(indicator)
+        }
+
+        if (!hasTransactionIndicator) {
+            Log.d(TAG, "No clear transaction indicator found")
+            return false
+        }
+
+        // Amount should be reasonable (not too small for promotional offers)
+        if (amount < 1.0) {
+            Log.d(TAG, "Amount too small: $amount")
+            return false
+        }
+
+        // Should not contain balance information without transaction
+        if (lowerBody.contains("balance") && !lowerBody.contains("debited") && !lowerBody.contains("credited")) {
+            // This might be just a balance inquiry
+            if (!lowerBody.contains("transaction") && !lowerBody.contains("txn")) {
+                Log.d(TAG, "Appears to be balance inquiry, not transaction")
+                return false
+            }
+        }
+
+        // Should not be OTP or verification messages
+        if (lowerBody.contains("otp") || lowerBody.contains("verification") ||
+            lowerBody.contains("verify") || lowerBody.contains("code")) {
+            Log.d(TAG, "Appears to be OTP/verification message")
+            return false
+        }
+
+        return true
+    }
+
+
     private data class ParsedDetails(
         val amount: Double,
         val type: TransactionType,
@@ -127,28 +422,30 @@ class SmsProcessingWorker @AssistedInject constructor(
         val accountHint: String? = null
     )
 
+    // Enhanced parseTransactionDetails method to handle credit alerts
     private fun parseTransactionDetails(messageBody: String, sender: String): ParsedDetails? {
         val lowerBody = messageBody.lowercase(Locale.ROOT)
         val originalBody = messageBody
 
-        // Enhanced transaction type detection with more patterns
+        // Enhanced transaction type detection with credit alert patterns
         val type: TransactionType = when {
-            // DEBIT/EXPENSE patterns - comprehensive (including "sent")
+            // DEBIT/EXPENSE patterns - comprehensive
             listOf(
-                "debit:", "debited", "spent", "paid", "payment to", "withdrawal",
-                "purchase", "txn at", "transaction at", "bought", "transferred to",
-                "sent to", "sent rs", "sent inr", "sent ₹", "dr ", "dr.", "withdrawal from",
-                "paid to", "outgoing", "deducted", "charged", "bill payment", "emi",
-                "autopay", "money sent", "amount sent", "transferred", "send money"
+                "debit alert", "debit:", "debited", "spent", "paid", "payment to",
+                "withdrawal", "purchase", "txn at", "transaction at", "bought",
+                "transferred to", "sent to", "sent rs", "sent inr", "sent ₹",
+                "dr ", "dr.", "withdrawal from", "paid to", "outgoing", "deducted",
+                "charged", "bill payment", "emi", "autopay", "money sent",
+                "amount sent", "transferred", "send money"
             ).any { lowerBody.contains(it) } -> TransactionType.EXPENSE
 
-            // CREDIT/INCOME patterns - comprehensive
+            // CREDIT/INCOME patterns - comprehensive (including credit alert)
             listOf(
-                "credit:", "credited", "received", "deposited", "payment from",
-                "refund", "cashback", "interest", "salary", "cr ", "cr.",
-                "received from", "transferred from", "deposit", "incoming",
-                "added", "bonus", "reward", "dividend", "commission", "money received",
-                "amount received"
+                "credit alert", "credit:", "credited", "received", "deposited",
+                "payment from", "refund", "cashback", "interest", "salary",
+                "cr ", "cr.", "received from", "transferred from", "deposit",
+                "incoming", "added", "bonus", "reward", "dividend", "commission",
+                "money received", "amount received", "credited to", "credit to"
             ).any { lowerBody.contains(it) } -> TransactionType.INCOME
 
             else -> {
@@ -178,9 +475,13 @@ class SmsProcessingWorker @AssistedInject constructor(
         return ParsedDetails(amount, type, merchant, notes, paymentMode, accountHint)
     }
 
+    // Enhanced amount extraction for credit alert format
     private fun extractAmount(messageBody: String): Double? {
-        // Multiple regex patterns for amount extraction
+        // Multiple regex patterns for amount extraction - enhanced for credit alerts
         val amountRegexes = listOf(
+            // Pattern for Credit Alert format: "Rs.5.00 credited"
+            """rs\.?\s*([\d,]+(?:\.\d{1,2})?)\s+credited""".toRegex(RegexOption.IGNORE_CASE),
+
             // Pattern 1: Currency symbols with amount
             """(?:rs\.?\s*|inr\s*|₹\s*)([\d,]+(?:\.\d{1,2})?)""".toRegex(RegexOption.IGNORE_CASE),
 
@@ -190,20 +491,26 @@ class SmsProcessingWorker @AssistedInject constructor(
             // Pattern 3: Transaction type with amount
             """(?:debit|credit|dr|cr):\s*(?:rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 4: Amount keywords
+            // Pattern 4: Credit Alert specific
+            """credit alert!\s*rs\.?\s*([\d,]+(?:\.\d{1,2})?)""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Pattern 5: Amount keywords
             """(?:amount|amt|sum)\s*(?:of)?\s*(?:rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 5: UPI format amounts
+            // Pattern 6: UPI format amounts
             """(?:upi|imps|neft)\s*(?:.*?)\s*([\d,]+(?:\.\d{1,2})?)""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 6: Balance format (Bal: Rs 1000.00)
+            // Pattern 7: Balance format (Bal: Rs 1000.00)
             """bal:\s*(?:rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 7: Generic number before transaction words
+            // Pattern 8: Generic number before transaction words
             """([\d,]+(?:\.\d{1,2})?)\s*(?:debited|credited|sent|received|spent|paid|purchase|withdraw|transfer)""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 8: Standalone amounts in transaction context
-            """\b([\d,]+\.\d{2})\b""".toRegex()
+            // Pattern 9: Standalone amounts in transaction context - but avoid promotional amounts
+            """\b([\d,]+\.\d{2})\b""".toRegex(),
+
+            // Pattern 10: Just numbers with proper validation
+            """\b([\d,]+)\b""".toRegex()
         )
 
         for (regex in amountRegexes) {
@@ -212,161 +519,271 @@ class SmsProcessingWorker @AssistedInject constructor(
                 val amountString = match.groups[1]?.value?.replace(",", "")
                 val amount = amountString?.toDoubleOrNull()
                 if (amount != null && amount > 0) {
+                    // Additional validation - avoid account numbers being treated as amounts
+                    if (amount > 1000000) { // Amounts over 10 lakh are suspicious
+                        continue
+                    }
+
                     Log.d(TAG, "Amount extracted: $amount using pattern: ${regex.pattern}")
                     return amount
                 }
             }
         }
 
+        Log.d(TAG, "No amount found in message: $messageBody")
         return null
     }
 
+    // Enhanced merchant extraction method for SmsProcessingWorker.kt
     private fun extractMerchant(messageBody: String, sender: String, type: TransactionType): String {
-        var merchant = "Unknown/SMS"
+        var merchant = "Unknown"
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
 
-        // Enhanced merchant patterns for RCS/notification messages
+        Log.d(TAG, "Extracting merchant from: $messageBody")
+
+        // Enhanced merchant patterns - ORDER MATTERS (most specific first)
         val merchantPatterns = listOf(
-            // RCS-specific patterns (for messages like "To IITMRP ACCT FULFILL FOODS")
-            """(?:to|paid to|sent to)\s+([A-Z][A-Z0-9\s]+[A-Z])(?:\s*on|\s*ref|\s*$)""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 1: "To MERCHANT_NAME" (most common in UPI transactions)
+            """(?:to|paid to|sent to|payment to|transferred to)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|upi|ref|txn|ac|a/c|\d{2}/\d{2}/\d{2,4}|$))""".toRegex(),
 
-            // UPI patterns - most common
-            """UPI/[^/]+/([^/]+)/([A-Za-z0-9\s.&'@*#-]+?)(?:\s|/|$)""".toRegex(RegexOption.IGNORE_CASE),
-            """UPI\s*(?:to|payment to|from)\s*([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:ref|txn|/|\s*$))""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 2: "From MERCHANT_NAME" (for credit transactions)
+            """(?:from|received from|credited from|payment from)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|upi|ref|txn|ac|a/c|\d{2}/\d{2}/\d{2,4}|$))""".toRegex(),
 
-            // Account-based patterns (like "IITMRP ACCT FULFILL FOODS")
-            """(?:ACCT|ACCOUNT)\s+([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:on|ref|txn|\s*$))""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 3: UPI transaction format "UPI/REF_NUM/MERCHANT/..."
+            """UPI/[^/]+/([A-Z][A-Z\s&.'-]+?)(?:/|\s|$)""".toRegex(),
 
-            // Direct payment patterns
-            """(?:to|paid to|sent to|purchase at|spent at|payment to|debited for|txn at|transaction at)\s+([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:\.|on|avbl|avl|bal|for|ref|txnid|upi|vpa|ac|card|ending|-)|\s*$)""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 4: Transaction at merchant
+            """(?:txn at|transaction at|spent at|purchase at)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|\d{2}/\d{2}|$))""".toRegex(),
 
-            // Received from patterns
-            """(?:from|received from|credited by|salary from|refund from|transfer from)\s+([A-Za-z0-9\s.&'@*#-]+?)(?:\s*(?:\.|on|avbl|avl|bal|for|ref|txnid|upi|vpa|ac|-)|\s*$)""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 5: VPA pattern - extract name from VPA but improved
+            """(?:from VPA|to VPA)\s+([A-Za-z][A-Za-z0-9._-]*?)@[A-Za-z0-9.-]+""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Info patterns (common in bank SMS)
-            """Info[:\s]*([A-Za-z0-9\s.&*@#-]+?)[\.\s]""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 6: Generic VPA pattern (as fallback)
+            """([A-Za-z][A-Za-z0-9._-]{2,})@[A-Za-z0-9.-]+""".toRegex(),
 
-            // Merchant/vendor patterns
-            """(?:merchant|vendor|at)\s+([A-Za-z0-9\s.&'*-]+?)(?:\s*(?:tx|ref|on|\s*$))""".toRegex(RegexOption.IGNORE_CASE),
+            // Pattern 7: Info: MERCHANT format
+            """Info\s*:\s*([A-Z][A-Z\s&.'-]+?)(?:\s|$)""".toRegex(RegexOption.IGNORE_CASE),
 
-            // POS patterns
-            """POS\s*[:\s]*([A-Za-z0-9\s.&'*-]+?)(?:\s*(?:on|ref|\s*$))""".toRegex(RegexOption.IGNORE_CASE),
-
-            // ATM patterns
-            """ATM\s*[:\s]*([A-Za-z0-9\s.&'*-]+?)(?:\s*(?:on|ref|\s*$))""".toRegex(RegexOption.IGNORE_CASE)
+            // Pattern 8: Debited for/Credited for
+            """(?:debited for|credited for|charged for)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|$))""".toRegex(RegexOption.IGNORE_CASE)
         )
 
-        // Try each pattern
+        // Try each pattern in order
         for (pattern in merchantPatterns) {
             val merchantMatch = pattern.find(messageBody)
             if (merchantMatch != null) {
-                // Get the last non-null group (handles multiple capture groups)
-                val extractedMerchant = merchantMatch.groups.drop(1)
-                    .filterNotNull()
-                    .lastOrNull()?.value?.trim()
+                val extractedMerchant = merchantMatch.groups[1]?.value?.trim()
 
                 if (!extractedMerchant.isNullOrBlank()) {
                     val cleaned = cleanMerchantName(extractedMerchant)
-                    if (cleaned.isNotBlank() && cleaned.length >= 2) {
+                    if (isValidMerchantName(cleaned)) {
                         merchant = cleaned
+                        Log.d(TAG, "Merchant extracted using pattern ${pattern.pattern}: '$merchant'")
                         break
                     }
                 }
             }
         }
 
-        // Try VPA pattern if no merchant found
-        if (merchant == "Unknown/SMS") {
-            val vpaPattern = """([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})""".toRegex()
-            val vpaMatch = vpaPattern.find(messageBody)
-            if (vpaMatch != null) {
-                merchant = vpaMatch.value.split("@")[0] // Use part before @
+        // Fallback: If no merchant found and sender is not generic bank, use cleaned sender
+        if (merchant == "Unknown" && !isGenericBankSender(sender.lowercase(Locale.ROOT))) {
+            val cleanedSender = cleanSenderName(sender)
+            if (isValidMerchantName(cleanedSender)) {
+                merchant = cleanedSender
+                Log.d(TAG, "Using cleaned sender as merchant: '$merchant'")
             }
         }
 
-        // For RCS/notification messages, don't use sender name as fallback
-        // since it's often the contact name, not the actual merchant
-        if (merchant == "Unknown/SMS") {
-            merchant = "Unknown"
-        }
-
+        Log.d(TAG, "Final merchant: '$merchant'")
         return merchant
     }
 
+    /**
+     * Enhanced merchant name cleaning with better validation
+     */
     private fun cleanMerchantName(rawMerchant: String): String {
         var cleaned = rawMerchant.trim()
 
-        // Remove common suffixes and patterns
+        Log.d(TAG, "Cleaning merchant name: '$rawMerchant'")
+
+        // Remove common suffixes and patterns first
         cleaned = cleaned.removeSuffix(".").removeSuffix(",").trim()
 
-        // Remove via patterns
+        // Remove "via" patterns
         cleaned = cleaned.replace(Regex("""\s+via\s+.*""", RegexOption.IGNORE_CASE), "").trim()
 
-        // Remove date patterns
-        cleaned = cleaned.split(Regex("""\s+(on|at)\s+\d{1,2}[-/]\d{1,2}"""))[0].trim()
+        // Remove date patterns (19/05/25, 19-05-2025, etc.)
+        cleaned = cleaned.replace(Regex("""\s+(?:on\s+)?\d{1,2}[-/]\d{1,2}[-/](?:\d{2}|\d{4}).*""", RegexOption.IGNORE_CASE), "").trim()
+
+        // Remove reference patterns
+        cleaned = cleaned.replace(Regex("""\s+(?:ref|reference|txn|transaction)\s*(?:no\.?|id|num)?\s*:?\s*\d+.*""", RegexOption.IGNORE_CASE), "").trim()
 
         // Remove balance info
-        cleaned = cleaned.split(Regex("""\s+(?:avbl|avl)\s+bal.*""", RegexOption.IGNORE_CASE))[0].trim()
-        cleaned = cleaned.split(Regex("""\s+bal:.*""", RegexOption.IGNORE_CASE))[0].trim()
+        cleaned = cleaned.replace(Regex("""\s+(?:avbl|avl|available)\s+bal.*""", RegexOption.IGNORE_CASE), "").trim()
+        cleaned = cleaned.replace(Regex("""\s+bal\s*:.*""", RegexOption.IGNORE_CASE), "").trim()
 
-        // Remove reference info
-        cleaned = cleaned.split(Regex("""\s+(?:ref|txn|transaction)\s+(?:no|id).*""", RegexOption.IGNORE_CASE))[0].trim()
-
-        // Remove RE (reference) suffix
-        cleaned = cleaned.replace(Regex("""\s+RE\s*$""", RegexOption.IGNORE_CASE), "").trim()
-
-        // Remove VPA prefix
-        cleaned = cleaned.replace(Regex("""^VPA\s*""", RegexOption.IGNORE_CASE), "").trim()
-
-        // Remove stuff after " - "
-        cleaned = cleaned.split(Regex("""\s*-\s*"""))[0].trim()
+        // Remove account info patterns
+        cleaned = cleaned.replace(Regex("""\s+a/c\s*(?:no\.?)?\s*[x*]*\d+""", RegexOption.IGNORE_CASE), "").trim()
+        cleaned = cleaned.replace(Regex("""\s+account\s*(?:no\.?)?\s*[x*]*\d+""", RegexOption.IGNORE_CASE), "").trim()
 
         // Remove card info
-        cleaned = cleaned.replace(Regex("""\s*card\s*\d+""", RegexOption.IGNORE_CASE), "").trim()
+        cleaned = cleaned.replace(Regex("""\s+card\s*(?:no\.?)?\s*[x*]*\d+""", RegexOption.IGNORE_CASE), "").trim()
 
-        // Remove account info
-        cleaned = cleaned.replace(Regex("""\s*a/c\s*\d+""", RegexOption.IGNORE_CASE), "").trim()
+        // Remove phone number patterns (like 7308080808 in your example)
+        cleaned = cleaned.replace(Regex("""\s+\d{10}"""), "").trim()
+        cleaned = cleaned.replace(Regex("""\s+\+\d{1,3}\s*\d{10}"""), "").trim()
 
-        // Handle special characters and cleanup
-        cleaned = cleaned.replace(Regex("""[*]{2,}"""), " ").trim()
+        // Remove UPI reference numbers in parentheses
+        cleaned = cleaned.replace(Regex("""\s*\(UPI\s+\d+\).*""", RegexOption.IGNORE_CASE), "").trim()
+
+        // Remove "Not You?" and similar security messages
+        cleaned = cleaned.replace(Regex("""\s+not you\?.*""", RegexOption.IGNORE_CASE), "").trim()
+        cleaned = cleaned.replace(Regex("""\s+call\s+\d+.*""", RegexOption.IGNORE_CASE), "").trim()
+        cleaned = cleaned.replace(Regex("""\s+sms\s+block.*""", RegexOption.IGNORE_CASE), "").trim()
+
+        // Handle VPA usernames (like "stanleyxavier2003" -> "Stanley Xavier")
+        if (cleaned.matches(Regex("^[a-z]+[a-z0-9]*\\d*$", RegexOption.IGNORE_CASE))) {
+            cleaned = formatVpaUsername(cleaned)
+        }
+
+        // Clean up multiple spaces and special characters
         cleaned = cleaned.replace(Regex("""\s{2,}"""), " ").trim()
+        cleaned = cleaned.replace(Regex("""[*]{2,}"""), " ").trim()
 
-        // Capitalize properly
-        if (cleaned.isNotBlank()) {
-            cleaned = cleaned.split(" ")
-                .joinToString(" ") { word ->
-                    if (word.length > 1) word.lowercase().replaceFirstChar { it.uppercase() }
-                    else word.uppercase()
-                }
+        // Proper case formatting for merchant names
+        if (cleaned.isNotBlank() && cleaned.length > 1) {
+            // Don't change case if it's already properly formatted (mixed case)
+            if (cleaned == cleaned.uppercase() || cleaned == cleaned.lowercase()) {
+                cleaned = cleaned.split(" ")
+                    .joinToString(" ") { word ->
+                        if (word.length > 1) {
+                            // Handle abbreviations (like "LTD", "PVT", "CO")
+                            if (word.uppercase() in listOf("LTD", "PVT", "CO", "INC", "LLC", "CORP", "PTE")) {
+                                word.uppercase()
+                            } else {
+                                word.lowercase().replaceFirstChar { it.uppercase() }
+                            }
+                        } else {
+                            word.uppercase()
+                        }
+                    }
+            }
         }
 
         // Truncate if too long
         if (cleaned.length > 50) {
-            cleaned = cleaned.substring(0, 50).trim() + "..."
+            cleaned = cleaned.substring(0, 50).trim()
+            if (cleaned.endsWith(" ")) {
+                cleaned = cleaned.trim() + "..."
+            }
         }
 
+        Log.d(TAG, "Cleaned merchant name: '$rawMerchant' -> '$cleaned'")
         return cleaned.ifBlank { "Unknown" }
     }
 
+    /**
+     * Validate if the extracted text is a valid merchant name
+     */
+    private fun isValidMerchantName(merchantName: String): Boolean {
+        if (merchantName.isBlank() || merchantName == "Unknown") {
+            return false
+        }
+
+        // Should not be purely numeric (likely account number or phone number)
+        if (merchantName.matches(Regex("^\\d+$"))) {
+            Log.d(TAG, "Rejected merchant (purely numeric): '$merchantName'")
+            return false
+        }
+
+        // Should not be too short (less than 2 characters)
+        if (merchantName.length < 2) {
+            Log.d(TAG, "Rejected merchant (too short): '$merchantName'")
+            return false
+        }
+
+        // Should not contain only special characters
+        if (!merchantName.matches(Regex(".*[A-Za-z].*"))) {
+            Log.d(TAG, "Rejected merchant (no letters): '$merchantName'")
+            return false
+        }
+
+        // Should not be common non-merchant patterns
+        val invalidPatterns = listOf(
+            "ref", "reference", "txn", "transaction", "upi", "imps", "neft", "rtgs",
+            "debit", "credit", "balance", "bal", "avbl", "avl", "account", "a/c",
+            "card", "ending", "xxxx", "****"
+        )
+
+        if (invalidPatterns.any { merchantName.lowercase().contains(it) } &&
+            merchantName.length < 10) { // Allow longer names that might contain these words
+            Log.d(TAG, "Rejected merchant (invalid pattern): '$merchantName'")
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * Format VPA username to proper name
+     */
+    private fun formatVpaUsername(username: String): String {
+        // Handle common patterns like "stanleyxavier2003" or "john.doe123"
+        val cleaned = username.replace(Regex("\\d+$"), "") // Remove trailing numbers
+            .replace(".", " ") // Replace dots with spaces
+            .replace("_", " ") // Replace underscores with spaces
+
+        // Try to split camelCase or combined names
+        val namePattern = """([a-z]+)([A-Z][a-z]+)""".toRegex()
+        val match = namePattern.find(cleaned)
+
+        return if (match != null) {
+            val firstName = match.groups[1]?.value?.replaceFirstChar { it.uppercase() } ?: ""
+            val lastName = match.groups[2]?.value ?: ""
+            "$firstName $lastName"
+        } else {
+            // Simple word splitting and capitalization
+            cleaned.split(Regex("\\s+"))
+                .filter { it.isNotBlank() }
+                .joinToString(" ") { word ->
+                    word.lowercase().replaceFirstChar { it.uppercase() }
+                }
+        }
+    }
+
+    /**
+     * Enhanced sender name cleaning
+     */
     private fun cleanSenderName(sender: String): String {
-        var cleaned = sender
+        var cleaned = sender.trim()
 
         // Remove common prefixes
-        cleaned = cleaned.replace(Regex("""^(?:VM-|BP-|AX-|AD-|TM-|JK-|SB-)""", RegexOption.IGNORE_CASE), "")
+        cleaned = cleaned.replace(Regex("""^(?:VM-|BP-|AX-|AD-|TM-|JK-|SB-|HD-)""", RegexOption.IGNORE_CASE), "")
 
-        // Clean up bank names
+        // Bank name mappings
         val bankNameMap = mapOf(
             "HDFCBK" to "HDFC Bank",
             "ICICIBK" to "ICICI Bank",
             "AXISBK" to "Axis Bank",
-            "SBIMB" to "SBI",
+            "SBIMB" to "SBI Bank",
             "KOTAKBK" to "Kotak Bank",
             "YESBANK" to "Yes Bank",
-            "RBLBANK" to "RBL Bank"
+            "RBLBANK" to "RBL Bank",
+            "PNBSMS" to "PNB Bank",
+            "UNIONBK" to "Union Bank",
+            "CANARABK" to "Canara Bank",
+            "BOBSMS" to "Bank of Baroda",
+            "IDBIBANK" to "IDBI Bank",
+            "INDUSBK" to "IndusInd Bank",
+            "FEDERAL" to "Federal Bank"
         )
 
+        // Apply bank name mapping
+        val upperCleaned = cleaned.uppercase()
         bankNameMap.forEach { (key, value) ->
-            if (cleaned.contains(key, ignoreCase = true)) {
+            if (upperCleaned.contains(key)) {
                 cleaned = value
+                return@forEach
             }
         }
 
@@ -397,82 +814,204 @@ class SmsProcessingWorker @AssistedInject constructor(
         }
     }
 
+    // Enhanced account hint extraction
     private fun extractAccountHint(messageBody: String): String? {
         val lowerBody = messageBody.lowercase(Locale.ROOT)
 
-        // Look for account number patterns
+        // Enhanced patterns for account hint extraction
         val accPatterns = listOf(
+            // Standard account patterns
             """a/c\s*(?:no\.?|number)?\s*(?:ending\s*(?:with)?|ending)?\s*x*(\d{3,6})""".toRegex(RegexOption.IGNORE_CASE),
             """account\s*(?:no\.?|number)?\s*(?:ending\s*(?:with)?|ending)?\s*x*(\d{3,6})""".toRegex(RegexOption.IGNORE_CASE),
-            """card\s*(?:no\.?|number)?\s*(?:ending\s*(?:with)?|ending)?\s*x*(\d{4})""".toRegex(RegexOption.IGNORE_CASE)
+            """card\s*(?:no\.?|number)?\s*(?:ending\s*(?:with)?|ending)?\s*x*(\d{4})""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Additional patterns for different formats
+            """a/c\s*x+(\d{3,6})""".toRegex(RegexOption.IGNORE_CASE),
+            """ac\s*(\d{3,6})""".toRegex(RegexOption.IGNORE_CASE),
+            """account\s*(\d{3,6})""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Credit card patterns
+            """card\s*ending\s*(\d{4})""".toRegex(RegexOption.IGNORE_CASE),
+            """card\s*x+(\d{4})""".toRegex(RegexOption.IGNORE_CASE),
+
+            // Bank-specific patterns
+            """(?:hdfc|icici|axis|sbi|kotak)\s*a/c\s*x*(\d{3,6})""".toRegex(RegexOption.IGNORE_CASE)
         )
 
         for (pattern in accPatterns) {
             val match = pattern.find(lowerBody)
             if (match != null) {
-                return match.groups[1]?.value
+                val hint = match.groups[1]?.value
+                if (!hint.isNullOrBlank()) {
+                    Log.d(TAG, "Extracted account hint: $hint using pattern: ${pattern.pattern}")
+                    return hint
+                }
             }
         }
 
+        Log.d(TAG, "No account hint found in message")
         return null
     }
 
+    // Enhanced determineAccount function for SmsProcessingWorker.kt
     private suspend fun determineAccount(messageBody: String, sender: String, accountHint: String?): Account? {
         val accounts = accountRepository.getAllAccounts().firstOrNull() ?: emptyList()
 
-        // Strategy 1: Use account hint if available
-        if (!accountHint.isNullOrBlank()) {
-            Log.d(TAG, "Found account hint: $accountHint")
-            val foundAccount = accounts.find { account ->
-                account.accountNumber?.endsWith(accountHint) == true ||
-                        account.name.contains(accountHint, ignoreCase = true)
-            }
-            if (foundAccount != null) {
-                Log.i(TAG, "Matched account by hint: ${foundAccount.name}")
-                return foundAccount
-            }
+        if (accounts.isEmpty()) {
+            Log.w(TAG, "No accounts found in the system")
+            return null
         }
 
-        // Strategy 2: Map sender to account (can be enhanced with user preferences)
+        Log.d(TAG, "Determining account for sender: $sender, hint: $accountHint")
+        Log.d(TAG, "Available accounts: ${accounts.map { "${it.name} (${it.accountNumber})" }}")
+
+        // Strategy 1: Use account hint if available (most reliable)
+        if (!accountHint.isNullOrBlank()) {
+            Log.d(TAG, "Trying to match account hint: $accountHint")
+
+            // Try exact match first
+            var foundAccount = accounts.find { account ->
+                account.accountNumber?.endsWith(accountHint) == true
+            }
+
+            // Try partial match
+            if (foundAccount == null) {
+                foundAccount = accounts.find { account ->
+                    account.accountNumber?.contains(accountHint, ignoreCase = true) == true ||
+                            account.name.contains(accountHint, ignoreCase = true)
+                }
+            }
+
+            if (foundAccount != null) {
+                Log.i(TAG, "✅ Matched account by hint: ${foundAccount.name} (${foundAccount.accountNumber})")
+                return foundAccount
+            }
+            Log.d(TAG, "No account matched the hint: $accountHint")
+        }
+
+        // Strategy 2: Enhanced sender-based mapping
+        val senderUpper = sender.uppercase()
+        Log.d(TAG, "Trying sender-based mapping for: $senderUpper")
+
+        // Enhanced sender mappings with more variations
         val senderMappings = mapOf(
-            "HDFCBK" to listOf("hdfc", "hdfc bank", "hdfc savings", "hdfc current"),
-            "ICICIBK" to listOf("icici", "icici bank", "icici savings", "icici current"),
-            "AXISBK" to listOf("axis", "axis bank", "axis savings", "axis current"),
-            "SBIMB" to listOf("sbi", "sbi bank", "state bank"),
-            "KOTAKBK" to listOf("kotak", "kotak bank"),
-            "YESBANK" to listOf("yes", "yes bank"),
-            "PAYTM" to listOf("paytm", "paytm wallet"),
-            "PHONEPE" to listOf("phonepe", "phone pe"),
-            "GPAY" to listOf("gpay", "google pay")
+            "HDFCBK" to listOf("hdfc", "hdfc bank", "hdfc savings", "hdfc current", "hd"),
+            "ICICIBK" to listOf("icici", "icici bank", "icici savings", "icici current", "ic"),
+            "AXISBK" to listOf("axis", "axis bank", "axis savings", "axis current", "ax"),
+            "SBIMB" to listOf("sbi", "sbi bank", "state bank", "state bank of india", "sb"),
+            "KOTAKBK" to listOf("kotak", "kotak bank", "kotak mahindra", "kt"),
+            "YESBANK" to listOf("yes", "yes bank", "yb"),
+            "RBLBANK" to listOf("rbl", "rbl bank"),
+            "PNBSMS" to listOf("pnb", "punjab national bank", "punjab"),
+            "UNIONBK" to listOf("union", "union bank"),
+            "CANARABK" to listOf("canara", "canara bank"),
+            "BOBSMS" to listOf("bob", "bank of baroda", "baroda"),
+            "IDBIBANK" to listOf("idbi", "idbi bank"),
+            "INDUSBK" to listOf("indus", "indusind", "indusind bank"),
+            "FEDERAL" to listOf("federal", "federal bank"),
+            "PAYTM" to listOf("paytm", "paytm wallet", "paytm payments bank"),
+            "PHONEPE" to listOf("phonepe", "phone pe", "pp"),
+            "GPAY" to listOf("gpay", "google pay", "googlepay"),
+            "AMAZON" to listOf("amazon", "amazon pay", "amazonpay"),
+            "BHIM" to listOf("bhim", "bhim upi"),
+            "MOBIKWIK" to listOf("mobikwik", "mobikwik wallet")
         )
 
-        val senderUpper = sender.uppercase()
-        senderMappings.forEach { (senderKey, accountNames) ->
-            if (senderUpper.contains(senderKey)) {
+        // Try exact sender key match first
+        senderMappings.forEach { (senderKey, accountKeywords) ->
+            if (senderUpper.contains(senderKey) || senderUpper == senderKey) {
                 val matchedAccount = accounts.find { account ->
-                    accountNames.any { name ->
-                        account.name.contains(name, ignoreCase = true)
+                    accountKeywords.any { keyword ->
+                        account.name.contains(keyword, ignoreCase = true) ||
+                                account.type.contains(keyword, ignoreCase = true)
                     }
                 }
                 if (matchedAccount != null) {
-                    Log.i(TAG, "Matched account by sender mapping: ${matchedAccount.name}")
+                    Log.i(TAG, "✅ Matched account by sender mapping: ${matchedAccount.name} for sender key: $senderKey")
                     return matchedAccount
                 }
             }
         }
 
-        // Strategy 3: Default SMS account from preferences
-        val sharedPrefs = applicationContext.getSharedPreferences("AppSettings", Context.MODE_PRIVATE)
-        val defaultAccountId = sharedPrefs.getLong("defaultSmsAccountId", -1L)
-        if (defaultAccountId != -1L) {
-            val defaultAccount = accounts.find { it.accountId == defaultAccountId }
-            if (defaultAccount != null) {
-                Log.i(TAG, "Using default SMS account: ${defaultAccount.name}")
-                return defaultAccount
+        // Try fuzzy matching for sender prefixes (VM-, BP-, etc.)
+        val cleanSender = senderUpper.replace(Regex("^(VM-|BP-|AX-|AD-|TM-|JK-|SB-|HD-)"), "")
+        if (cleanSender != senderUpper) {
+            Log.d(TAG, "Trying fuzzy match with cleaned sender: $cleanSender")
+            senderMappings.forEach { (senderKey, accountKeywords) ->
+                if (cleanSender.contains(senderKey)) {
+                    val matchedAccount = accounts.find { account ->
+                        accountKeywords.any { keyword ->
+                            account.name.contains(keyword, ignoreCase = true)
+                        }
+                    }
+                    if (matchedAccount != null) {
+                        Log.i(TAG, "✅ Matched account by fuzzy sender mapping: ${matchedAccount.name}")
+                        return matchedAccount
+                    }
+                }
             }
         }
 
-        Log.w(TAG, "No account could be determined for sender: $sender")
+        // Strategy 3: Check message body for account clues
+        Log.d(TAG, "Checking message body for account clues")
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
+
+        accounts.forEach { account ->
+            // Check if account name appears in message
+            if (account.name.isNotBlank() && lowerBody.contains(account.name.lowercase())) {
+                Log.i(TAG, "✅ Matched account by name in message: ${account.name}")
+                return account
+            }
+
+            // Check if account number appears in message
+            if (!account.accountNumber.isNullOrBlank() &&
+                (lowerBody.contains(account.accountNumber!!) ||
+                        lowerBody.contains("x${account.accountNumber!!.takeLast(4)}"))) {
+                Log.i(TAG, "✅ Matched account by number in message: ${account.name}")
+                return account
+            }
+        }
+
+        // Strategy 4: Default SMS account from preferences
+        val sharedPrefs = applicationContext.getSharedPreferences("AppSettings", Context.MODE_PRIVATE)
+        val defaultAccountId = sharedPrefs.getLong("defaultSmsAccountId", -1L)
+
+        if (defaultAccountId != -1L) {
+            val defaultAccount = accounts.find { it.accountId == defaultAccountId }
+            if (defaultAccount != null) {
+                Log.i(TAG, "✅ Using default SMS account: ${defaultAccount.name}")
+                return defaultAccount
+            } else {
+                Log.w(TAG, "Default SMS account ID $defaultAccountId not found in current accounts")
+            }
+        }
+
+        // Strategy 5: If only one account exists, use it
+        if (accounts.size == 1) {
+            Log.i(TAG, "✅ Only one account exists, using: ${accounts[0].name}")
+            return accounts[0]
+        }
+
+        // Strategy 6: Try to find the most recently used account for similar transactions
+        Log.d(TAG, "Trying to find most recently used account for similar sender")
+        try {
+            val recentTransactions = transactionRepository.getRecentTransactionsBySender(sender, 10)
+            val recentAccountIds = recentTransactions.mapNotNull { it.accountId }.distinct()
+
+            if (recentAccountIds.isNotEmpty()) {
+                val recentAccount = accounts.find { it.accountId == recentAccountIds.first() }
+                if (recentAccount != null) {
+                    Log.i(TAG, "✅ Using most recently used account for this sender: ${recentAccount.name}")
+                    return recentAccount
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error fetching recent transactions: ${e.message}")
+        }
+
+        Log.w(TAG, "❌ Could not determine account for sender: $sender")
+        Log.w(TAG, "Available accounts: ${accounts.joinToString(", ") { "${it.name} (${it.accountNumber ?: "no number"})" }}")
+
         return null
     }
 
@@ -538,7 +1077,7 @@ class SmsProcessingWorker @AssistedInject constructor(
                 lowerSender.matches(Regex("^[a-z0-9]{2}-[a-z0-9]{5,10}$"))
     }
 
-    // Duplicate detection methods
+    // SMS duplicate detection methods (simplified since main duplicate detection is handled by DuplicateDetectionManager)
     private fun generateSmsHash(sender: String, body: String, timestamp: Long): String {
         val content = "$sender|$body|${timestamp / 60000}" // Group by minute to handle slight timestamp differences
         return MessageDigest.getInstance("MD5")

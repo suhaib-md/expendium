@@ -58,7 +58,43 @@ interface TransactionDao {
     @Delete
     suspend fun delete(transaction: Transaction)
 
+    // NEW METHODS FOR TIME RANGE QUERIES AND DUPLICATE DETECTION
+
+    /**
+     * Get transactions within a specific time range for duplicate detection
+     */
+    @Query("""
+        SELECT * FROM transactions 
+        WHERE transactionDate >= :startTime AND transactionDate <= :endTime 
+        ORDER BY transactionDate DESC
+    """)
+    suspend fun getTransactionsInTimeRange(startTime: Long, endTime: Long): List<Transaction>
+
+    /**
+     * Find a similar transaction based on amount, type, and time window
+     */
+    @Query("""
+        SELECT * FROM transactions 
+        WHERE amount BETWEEN :minAmount AND :maxAmount 
+        AND type = :type 
+        AND transactionDate BETWEEN :startTime AND :endTime 
+        ORDER BY transactionDate DESC 
+        LIMIT 1
+    """)
+    suspend fun findSimilarTransaction(
+        minAmount: Double,
+        maxAmount: Double,
+        type: TransactionType,
+        startTime: Long,
+        endTime: Long
+    ): Transaction?
+
+    @Query("""
+    SELECT * FROM transactions 
+    WHERE notes LIKE '%' || :sender || '%' 
+    AND isManual = 0 
+    ORDER BY transactionDate DESC 
+    LIMIT :limit
+""")
+    suspend fun getRecentTransactionsBySender(sender: String, limit: Int): List<Transaction>
 }
-
-
-
