@@ -48,7 +48,7 @@ fun AccountListScreen(
         },
         floatingActionButton = {
             FloatingActionButton(onClick = {
-                // Use the navigation helper function for adding an account
+                accountViewModel.prepareNewAccount() // Prepare for new account
                 navController.navigateToAddAccount()
             }) {
                 Icon(Icons.Filled.Add, contentDescription = "Add Account")
@@ -74,7 +74,6 @@ fun AccountListScreen(
                         AccountItem(
                             account = account,
                             onEditClick = {
-                                // Use the navigation helper function for editing an account
                                 navController.navigateToEditAccount(account.accountId)
                             },
                             onDeleteClick = {
@@ -84,9 +83,7 @@ fun AccountListScreen(
                     }
                 }
             }
-            // Snackbar for error messages
-            // Consider extracting this to a reusable composable if used in multiple screens
-            if (uiState.errorMessage != null) {
+            if (uiState.errorMessage != null && !uiState.saveSuccess) { // Don't show generic errors if a save just happened
                 val snackbarHostState = remember { SnackbarHostState() }
                 LaunchedEffect(uiState.errorMessage) {
                     snackbarHostState.showSnackbar(
@@ -94,7 +91,7 @@ fun AccountListScreen(
                         actionLabel = "Dismiss",
                         duration = SnackbarDuration.Short
                     )
-                    accountViewModel.clearErrorMessage() // Clear error after showing
+                    accountViewModel.clearErrorMessage()
                 }
                 SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.CenterHorizontally))
             }
@@ -146,6 +143,12 @@ fun AccountItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = account.name, style = MaterialTheme.typography.titleMedium)
                 Text(text = "Type: ${account.type}", style = MaterialTheme.typography.bodySmall)
+                // --- MODIFIED TO SHOW ACCOUNT NUMBER ---
+                account.accountNumber?.let { accNum ->
+                    if (accNum.isNotBlank()) {
+                        Text(text = "Number: $accNum", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Text(text = "Balance: ${"%.2f".format(account.currentBalance)}", style = MaterialTheme.typography.bodySmall)
             }
             Row {

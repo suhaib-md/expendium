@@ -29,7 +29,8 @@ object DatabaseModule {
             ExpendiumDatabase::class.java,
             ExpendiumDatabase.DATABASE_NAME
         )
-            .fallbackToDestructiveMigration() // Remove this in production
+            .addMigrations(ExpendiumDatabase.MIGRATION_1_2) // <--- ADD THIS LINE
+            //.fallbackToDestructiveMigration() // Remove this in production
             .build()
     }
 

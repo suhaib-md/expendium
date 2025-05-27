@@ -27,25 +27,18 @@ fun AddEditAccountScreen(
     val uiState by accountViewModel.uiState.collectAsState()
 
     LaunchedEffect(key1 = accountId) {
-        if (accountId != null && accountId != -1L) { // -1L could be a convention for new
+        if (accountId != null && accountId != -1L) {
             accountViewModel.loadAccountForEditing(accountId)
         } else {
             accountViewModel.prepareNewAccount()
         }
     }
 
-    LaunchedEffect(key1 = uiState.isLoading, key2 = uiState.errorMessage) {
-        // If save was successful (isLoading is false and no error message specifically from save)
-        // and we are no longer in edit mode or creating a new account.
-        // This logic might need refinement based on how you want navigation to behave post-save.
-        if (!uiState.isLoading && uiState.errorMessage == null && (uiState.accountToEdit != null || accountId == null)) {
-            // Check if the account name is empty, implying a successful reset/save for a new item, or successful update.
-            // A more robust check might be a dedicated "saveSuccess" flag in UiState.
-            if (uiState.accountName.isBlank() && !uiState.isEditMode && accountId == null) { // After successful new account save
-                // navController.popBackStack() // Navigate back after successful save
-            } else if (uiState.isEditMode && uiState.accountToEdit != null && uiState.accountName == uiState.accountToEdit?.name) {
-                // Potentially navigate back after successful edit if fields match (or use a success flag)
-            }
+    // Navigate back on successful save
+    LaunchedEffect(key1 = uiState.saveSuccess) {
+        if (uiState.saveSuccess) {
+            navController.popBackStack()
+            accountViewModel.navigationCompleted() // Reset the flag
         }
     }
 
@@ -62,15 +55,7 @@ fun AddEditAccountScreen(
                 actions = {
                     IconButton(onClick = {
                         accountViewModel.saveAccount()
-                        // Consider navigating back only if save is successful.
-                        // You might observe a success state from the ViewModel.
-                        // For now, it will attempt to save, and error messages will show.
-                        // If successful, and ViewModel clears fields, it feels like a new entry.
-                        // If save successful and it was an edit, it stays on screen.
-                        // To navigate back on success:
-                        // Observe a specific "saveSuccess" flag in your UiState.
-                        // if (saveSuccessful) navController.popBackStack()
-
+                        // Navigation is now handled by the LaunchedEffect observing uiState.saveSuccess
                     }) {
                         Icon(Icons.Filled.Save, contentDescription = "Save Account")
                     }
@@ -86,36 +71,51 @@ fun AddEditAccountScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (uiState.isLoading) {
+            if (uiState.isLoading && !uiState.isEditMode && uiState.accountToEdit == null) { // Show loader only when initially loading, not during field edits
                 CircularProgressIndicator()
             }
 
             OutlinedTextField(
                 value = uiState.accountName,
                 onValueChange = { accountViewModel.onAccountNameChange(it) },
-                label = { Text("Account Name") },
+                label = { Text("Account Name *") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                isError = uiState.errorMessage?.contains("name", ignoreCase = true) == true
+                isError = uiState.errorMessage?.contains("name", ignoreCase = true) == true,
+                enabled = !uiState.isLoading
             )
 
             OutlinedTextField(
                 value = uiState.accountType,
                 onValueChange = { accountViewModel.onAccountTypeChange(it) },
-                label = { Text("Account Type (e.g., Bank, Cash)") },
+                label = { Text("Account Type (e.g., Bank, Cash) *") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                isError = uiState.errorMessage?.contains("type", ignoreCase = true) == true
+                isError = uiState.errorMessage?.contains("type", ignoreCase = true) == true,
+                enabled = !uiState.isLoading
+            )
+
+            // --- ADDED Account Number Field ---
+            OutlinedTextField(
+                value = uiState.accountNumber,
+                onValueChange = { accountViewModel.onAccountNumberChange(it) },
+                label = { Text("Account Number (Optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                // No specific error for account number unless you add validation
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), // Or KeyboardType.Text if it can have non-digits
+                enabled = !uiState.isLoading
             )
 
             OutlinedTextField(
                 value = uiState.initialBalance,
                 onValueChange = { accountViewModel.onInitialBalanceChange(it) },
-                label = { Text("Initial Balance") },
+                label = { Text("Current/Initial Balance *") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                isError = uiState.errorMessage?.contains("balance", ignoreCase = true) == true
+                isError = uiState.errorMessage?.contains("balance", ignoreCase = true) == true,
+                enabled = !uiState.isLoading
             )
 
             if (uiState.errorMessage != null) {

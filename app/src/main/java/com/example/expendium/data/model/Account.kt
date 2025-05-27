@@ -11,6 +11,7 @@ data class Account(
     val name: String,
     val currentBalance: Double = 0.0, // Example field
     val type: String, // e.g., "Bank", "Cash", "Credit Card"
+    val accountNumber: String? = null, // <--- ADD THIS LINE (make it nullable)
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
     // Add other relevant fields like currency, icon, etc.
