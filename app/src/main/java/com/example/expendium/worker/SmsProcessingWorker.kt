@@ -11,6 +11,7 @@ import com.example.expendium.data.model.Transaction
 import com.example.expendium.data.model.TransactionType
 import com.example.expendium.data.repository.AccountRepository
 import com.example.expendium.data.repository.TransactionRepository
+import com.example.expendium.data.repository.CategoryRepository
 import com.example.expendium.utils.DuplicateDetectionManager
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -27,6 +28,7 @@ class SmsProcessingWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val transactionRepository: TransactionRepository,
     private val accountRepository: AccountRepository,
+    private val categoryRepository: CategoryRepository,
     private val duplicateDetectionManager: DuplicateDetectionManager
 ) : CoroutineWorker(appContext, workerParams) {
 
@@ -538,44 +540,63 @@ class SmsProcessingWorker @AssistedInject constructor(
     private fun extractMerchant(messageBody: String, sender: String, type: TransactionType): String {
         var merchant = "Unknown"
         val lowerBody = messageBody.lowercase(Locale.ROOT)
+        val originalBody = messageBody
 
         Log.d(TAG, "Extracting merchant from: $messageBody")
+        Log.d(TAG, "Transaction type: $type")
 
         // Enhanced merchant patterns - ORDER MATTERS (most specific first)
-        val merchantPatterns = listOf(
-            // Pattern 1: "To MERCHANT_NAME" (most common in UPI transactions)
-            """(?:to|paid to|sent to|payment to|transferred to)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|upi|ref|txn|ac|a/c|\d{2}/\d{2}/\d{2,4}|$))""".toRegex(),
+        val merchantPatterns = when (type) {
+            TransactionType.EXPENSE -> listOf(
+                // Pattern 1: "To MERCHANT_NAME" (most common in UPI debit/expense transactions)
+                """(?:to|paid to|sent to|payment to|transferred to)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|upi|ref|txn|ac|a/c|\d{2}/\d{2}/\d{2,4}|$))""".toRegex(),
 
-            // Pattern 2: "From MERCHANT_NAME" (for credit transactions)
-            """(?:from|received from|credited from|payment from)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|upi|ref|txn|ac|a/c|\d{2}/\d{2}/\d{2,4}|$))""".toRegex(),
+                // Pattern 2: UPI transaction format "UPI/REF_NUM/MERCHANT/..."
+                """UPI/[^/]+/([A-Z][A-Z\s&.'-]+?)(?:/|\s|$)""".toRegex(),
 
-            // Pattern 3: UPI transaction format "UPI/REF_NUM/MERCHANT/..."
-            """UPI/[^/]+/([A-Z][A-Z\s&.'-]+?)(?:/|\s|$)""".toRegex(),
+                // Pattern 3: Transaction at merchant
+                """(?:txn at|transaction at|spent at|purchase at|bought at)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|\d{2}/\d{2}|$))""".toRegex(),
 
-            // Pattern 4: Transaction at merchant
-            """(?:txn at|transaction at|spent at|purchase at)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|\d{2}/\d{2}|$))""".toRegex(),
+                // Pattern 4: Debited for/charged for
+                """(?:debited for|charged for|spent on|paid for)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|at|$))""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 5: VPA pattern - extract name from VPA but improved
-            """(?:from VPA|to VPA)\s+([A-Za-z][A-Za-z0-9._-]*?)@[A-Za-z0-9.-]+""".toRegex(RegexOption.IGNORE_CASE),
+                // Pattern 5: VPA pattern for expenses - extract name from recipient VPA
+                """(?:to VPA|sent to)\s+([A-Za-z][A-Za-z0-9._-]*?)@[A-Za-z0-9.-]+""".toRegex(RegexOption.IGNORE_CASE),
 
-            // Pattern 6: Generic VPA pattern (as fallback)
-            """([A-Za-z][A-Za-z0-9._-]{2,})@[A-Za-z0-9.-]+""".toRegex(),
+                // Pattern 6: Info: MERCHANT format (but avoid bank names)
+                """Info\s*:\s*([A-Z][A-Z\s&.'-]+?)(?:\s|$)""".toRegex(RegexOption.IGNORE_CASE)
+            )
 
-            // Pattern 7: Info: MERCHANT format
-            """Info\s*:\s*([A-Z][A-Z\s&.'-]+?)(?:\s|$)""".toRegex(RegexOption.IGNORE_CASE),
+            TransactionType.INCOME -> listOf(
+                // Pattern 1: "From MERCHANT_NAME" (for credit/income transactions)
+                """(?:from|received from|credited from|payment from|transferred from)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|upi|ref|txn|ac|a/c|to|$))""".toRegex(),
 
-            // Pattern 8: Debited for/Credited for
-            """(?:debited for|credited for|charged for)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|$))""".toRegex(RegexOption.IGNORE_CASE)
-        )
+                // Pattern 2: VPA pattern for income - extract name from sender VPA
+                """(?:from VPA|received from)\s+([A-Za-z][A-Za-z0-9._-]*?)@[A-Za-z0-9.-]+""".toRegex(RegexOption.IGNORE_CASE),
+
+                // Pattern 3: Credited by/for
+                """(?:credited by|credited for|received for)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|$))""".toRegex(RegexOption.IGNORE_CASE),
+
+                // Pattern 4: Salary/wage patterns
+                """(?:salary from|wage from|payment from)\s+([A-Z][A-Z\s&.'-]+?)(?:\s+(?:on|ref|txn|$))""".toRegex(RegexOption.IGNORE_CASE)
+            )
+        }
 
         // Try each pattern in order
         for (pattern in merchantPatterns) {
-            val merchantMatch = pattern.find(messageBody)
+            val merchantMatch = pattern.find(originalBody)
             if (merchantMatch != null) {
                 val extractedMerchant = merchantMatch.groups[1]?.value?.trim()
 
                 if (!extractedMerchant.isNullOrBlank()) {
                     val cleaned = cleanMerchantName(extractedMerchant)
+
+                    // Additional validation: Skip if it's a bank name (for expense transactions)
+                    if (type == TransactionType.EXPENSE && isBankName(cleaned)) {
+                        Log.d(TAG, "Skipping bank name as merchant for expense: '$cleaned'")
+                        continue
+                    }
+
                     if (isValidMerchantName(cleaned)) {
                         merchant = cleaned
                         Log.d(TAG, "Merchant extracted using pattern ${pattern.pattern}: '$merchant'")
@@ -585,10 +606,50 @@ class SmsProcessingWorker @AssistedInject constructor(
             }
         }
 
+        // Special handling for multi-line SMS with clear "To" indicators
+        if (merchant == "Unknown" && type == TransactionType.EXPENSE) {
+            // Look for "To" followed by merchant name on separate lines or with clear formatting
+            val toPatterns = listOf(
+                """(?:^|\n)\s*To\s+([A-Z][A-Z\s&.'-]+?)(?:\s*$|\n)""".toRegex(RegexOption.MULTILINE),
+                """To\s+([A-Z][A-Z\s&.'-]{3,50}?)(?:\s+On|\s+Ref|\s*$)""".toRegex()
+            )
+
+            for (pattern in toPatterns) {
+                val match = pattern.find(originalBody)
+                if (match != null) {
+                    val extractedMerchant = match.groups[1]?.value?.trim()
+                    if (!extractedMerchant.isNullOrBlank()) {
+                        val cleaned = cleanMerchantName(extractedMerchant)
+                        if (isValidMerchantName(cleaned) && !isBankName(cleaned)) {
+                            merchant = cleaned
+                            Log.d(TAG, "Merchant extracted using 'To' pattern: '$merchant'")
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        // Generic VPA pattern as fallback (but not for bank senders)
+        if (merchant == "Unknown" && !isGenericBankSender(sender.lowercase(Locale.ROOT))) {
+            val vpaPattern = """([A-Za-z][A-Za-z0-9._-]{2,})@[A-Za-z0-9.-]+""".toRegex()
+            val vpaMatch = vpaPattern.find(originalBody)
+            if (vpaMatch != null) {
+                val vpaUsername = vpaMatch.groups[1]?.value
+                if (!vpaUsername.isNullOrBlank()) {
+                    val formatted = formatVpaUsername(vpaUsername)
+                    if (isValidMerchantName(formatted)) {
+                        merchant = formatted
+                        Log.d(TAG, "Merchant extracted from VPA: '$merchant'")
+                    }
+                }
+            }
+        }
+
         // Fallback: If no merchant found and sender is not generic bank, use cleaned sender
         if (merchant == "Unknown" && !isGenericBankSender(sender.lowercase(Locale.ROOT))) {
             val cleanedSender = cleanSenderName(sender)
-            if (isValidMerchantName(cleanedSender)) {
+            if (isValidMerchantName(cleanedSender) && !isBankName(cleanedSender)) {
                 merchant = cleanedSender
                 Log.d(TAG, "Using cleaned sender as merchant: '$merchant'")
             }
@@ -599,7 +660,24 @@ class SmsProcessingWorker @AssistedInject constructor(
     }
 
     /**
-     * Enhanced merchant name cleaning with better validation
+     * Check if the given name is a bank name (to avoid using bank as merchant for expenses)
+     */
+    private fun isBankName(name: String): Boolean {
+        val lowerName = name.lowercase(Locale.ROOT)
+        val bankKeywords = listOf(
+            "bank", "hdfc", "icici", "axis", "sbi", "kotak", "yes bank", "rbl",
+            "pnb", "union bank", "canara", "baroda", "idbi", "indusind", "federal",
+            "state bank", "punjab national", "bank of baroda", "hdfc bank",
+            "icici bank", "axis bank", "kotak bank"
+        )
+
+        return bankKeywords.any { keyword ->
+            lowerName.contains(keyword) && lowerName.length < 25 // Avoid false positives with longer names
+        }
+    }
+
+    /**
+     * Enhanced merchant name cleaning with better bank name filtering
      */
     private fun cleanMerchantName(rawMerchant: String): String {
         var cleaned = rawMerchant.trim()
@@ -622,14 +700,14 @@ class SmsProcessingWorker @AssistedInject constructor(
         cleaned = cleaned.replace(Regex("""\s+(?:avbl|avl|available)\s+bal.*""", RegexOption.IGNORE_CASE), "").trim()
         cleaned = cleaned.replace(Regex("""\s+bal\s*:.*""", RegexOption.IGNORE_CASE), "").trim()
 
-        // Remove account info patterns
+        // Remove account info patterns (but be more careful with A/C)
         cleaned = cleaned.replace(Regex("""\s+a/c\s*(?:no\.?)?\s*[x*]*\d+""", RegexOption.IGNORE_CASE), "").trim()
         cleaned = cleaned.replace(Regex("""\s+account\s*(?:no\.?)?\s*[x*]*\d+""", RegexOption.IGNORE_CASE), "").trim()
 
         // Remove card info
         cleaned = cleaned.replace(Regex("""\s+card\s*(?:no\.?)?\s*[x*]*\d+""", RegexOption.IGNORE_CASE), "").trim()
 
-        // Remove phone number patterns (like 7308080808 in your example)
+        // Remove phone number patterns
         cleaned = cleaned.replace(Regex("""\s+\d{10}"""), "").trim()
         cleaned = cleaned.replace(Regex("""\s+\+\d{1,3}\s*\d{10}"""), "").trim()
 
@@ -658,7 +736,7 @@ class SmsProcessingWorker @AssistedInject constructor(
                     .joinToString(" ") { word ->
                         if (word.length > 1) {
                             // Handle abbreviations (like "LTD", "PVT", "CO")
-                            if (word.uppercase() in listOf("LTD", "PVT", "CO", "INC", "LLC", "CORP", "PTE")) {
+                            if (word.uppercase() in listOf("LTD", "PVT", "CO", "INC", "LLC", "CORP", "PTE", "ACCT")) {
                                 word.uppercase()
                             } else {
                                 word.lowercase().replaceFirstChar { it.uppercase() }
@@ -1015,60 +1093,177 @@ class SmsProcessingWorker @AssistedInject constructor(
         return null
     }
 
+    // Enhanced category determination with proper ID mapping
     private suspend fun determineCategory(merchant: String, messageBody: String, type: TransactionType): Long? {
         val lowerMerchant = merchant.lowercase(Locale.ROOT)
         val lowerBody = messageBody.lowercase(Locale.ROOT)
 
-        // Enhanced category mapping (you can expand this based on your categories)
+        // Get all categories from repository
+        val categories = categoryRepository.getAllCategories().firstOrNull() ?: return null
+
         if (type == TransactionType.EXPENSE) {
             when {
                 // Food & Dining
                 listOf("zomato", "swiggy", "ubereats", "dominos", "pizza", "restaurant",
-                    "food", "cafe", "starbucks", "kfc", "mcdonald", "burger").any {
+                    "food", "cafe", "starbucks", "kfc", "mcdonald", "burger", "biryani",
+                    "dining", "eatery", "kitchen", "cook", "meal", "lunch", "dinner",
+                    "breakfast", "snack", "bakery", "sweet", "juice", "coffee", "tea").any {
                     lowerMerchant.contains(it) || lowerBody.contains(it)
-                } -> return null // Replace with actual food category ID
+                } -> return categories.find { it.name == "Food & Dining" }?.categoryId
+
+                // Groceries (separate from general shopping)
+                listOf("grocery", "supermarket", "vegetables", "fruits", "milk", "bread",
+                    "rice", "dal", "oil", "spices", "provisions", "kirana", "general store",
+                    "bigbasket", "grofers", "blinkit", "dunzo", "zepto", "instamart").any {
+                    lowerMerchant.contains(it) || lowerBody.contains(it)
+                } -> return categories.find { it.name == "Groceries" }?.categoryId
 
                 // Transportation
                 listOf("ola", "uber", "taxi", "fuel", "petrol", "diesel", "metro",
-                    "bus", "auto", "rickshaw", "rapido").any {
+                    "bus", "auto", "rickshaw", "rapido", "bmtc", "delhi metro", "mumbai local",
+                    "cab", "transport", "parking", "toll", "fastag", "travel card").any {
                     lowerMerchant.contains(it) || lowerBody.contains(it)
-                } -> return null // Replace with transport category ID
+                } -> return categories.find { it.name == "Transportation" }?.categoryId
 
-                // Shopping
+                // Shopping (general merchandise)
                 listOf("amazon", "flipkart", "myntra", "ajio", "shopping", "mall",
-                    "store", "mart", "bazaar", "zepto").any {
+                    "store", "mart", "bazaar", "online", "ecommerce", "fashion",
+                    "clothing", "electronics", "mobile", "laptop", "gadget").any {
                     lowerMerchant.contains(it) || lowerBody.contains(it)
-                } -> return null // Replace with shopping category ID
+                } -> return categories.find { it.name == "Shopping" }?.categoryId
 
                 // Bills & Utilities
                 listOf("bill", "recharge", "electricity", "gas", "water", "broadband",
-                    "internet", "mobile", "jio", "airtel", "vi").any {
+                    "internet", "mobile", "jio", "airtel", "vi", "bsnl", "utility",
+                    "power", "energy", "telephone", "landline", "dth", "cable tv",
+                    "wifi", "postpaid", "prepaid").any {
                     lowerMerchant.contains(it) || lowerBody.contains(it)
-                } -> return null // Replace with bills category ID
+                } -> return categories.find { it.name == "Bills & Utilities" }?.categoryId
 
                 // Entertainment
                 listOf("netflix", "amazon prime", "hotstar", "spotify", "movie",
-                    "cinema", "ticket", "booking").any {
+                    "cinema", "ticket", "booking", "entertainment", "music", "video",
+                    "streaming", "youtube", "gaming", "games", "concert", "show").any {
                     lowerMerchant.contains(it) || lowerBody.contains(it)
-                } -> return null // Replace with entertainment category ID
+                } -> return categories.find { it.name == "Entertainment" }?.categoryId
+
+                // Healthcare
+                listOf("hospital", "clinic", "doctor", "medical", "pharmacy", "medicine",
+                    "health", "apollo", "fortis", "max", "medplus", "1mg", "pharmeasy",
+                    "netmeds", "dental", "eye care", "diagnostic", "lab test").any {
+                    lowerMerchant.contains(it) || lowerBody.contains(it)
+                } -> return categories.find { it.name == "Healthcare" }?.categoryId
+
+                // Education
+                listOf("school", "college", "university", "education", "course", "tuition",
+                    "fees", "book", "library", "training", "certification", "exam",
+                    "study", "learning", "coaching", "tutorial").any {
+                    lowerMerchant.contains(it) || lowerBody.contains(it)
+                } -> return categories.find { it.name == "Education" }?.categoryId
+
+                // Travel
+                listOf("flight", "hotel", "booking", "travel", "trip", "vacation",
+                    "holiday", "irctc", "train", "railway", "makemytrip", "goibibo",
+                    "yatra", "cleartrip", "resort", "tourism").any {
+                    lowerMerchant.contains(it) || lowerBody.contains(it)
+                } -> return categories.find { it.name == "Travel" }?.categoryId
+
+                // Personal Care
+                listOf("salon", "spa", "beauty", "cosmetic", "hair", "skin care",
+                    "personal care", "grooming", "barber", "parlour", "wellness",
+                    "massage", "facial", "manicure", "pedicure").any {
+                    lowerMerchant.contains(it) || lowerBody.contains(it)
+                } -> return categories.find { it.name == "Personal Care" }?.categoryId
             }
         } else if (type == TransactionType.INCOME) {
             when {
                 // Salary
-                listOf("salary", "wage", "pay", "employer").any { lowerBody.contains(it) } ->
-                    return null // Replace with salary category ID
+                listOf("salary", "wage", "pay", "employer", "payroll", "increment",
+                    "bonus", "allowance", "compensation").any {
+                    lowerBody.contains(it) || lowerMerchant.contains(it)
+                } -> return categories.find { it.name == "Salary" }?.categoryId
 
-                // Interest & Returns
-                listOf("interest", "dividend", "return", "cashback", "reward").any { lowerBody.contains(it) } ->
-                    return null // Replace with returns category ID
-
-                // Refunds
-                listOf("refund", "refunded", "reversal").any { lowerBody.contains(it) } ->
-                    return null // Replace with refund category ID
+                // Other Income (Interest, Cashback, etc.)
+                listOf("interest", "dividend", "return", "cashback", "reward", "refund",
+                    "refunded", "reversal", "credit", "earning", "commission",
+                    "freelance", "consulting", "investment").any {
+                    lowerBody.contains(it) || lowerMerchant.contains(it)
+                } -> return categories.find { it.name == "Other Income" }?.categoryId
             }
         }
 
-        return null // No category determined
+        // If no category is determined, return "Other" category
+        return categories.find { it.name == "Other" }?.categoryId
+    }
+
+    // Alternative approach: Create a category mapping cache for better performance
+    private var categoryCache: Map<String, Long>? = null
+
+    private suspend fun initializeCategoryCache() {
+        if (categoryCache == null) {
+            val categories = categoryRepository.getAllCategories().firstOrNull() ?: emptyList()
+            categoryCache = categories.associate { it.name to it.categoryId }
+        }
+    }
+
+    private suspend fun determineCategoryOptimized(merchant: String, messageBody: String, type: TransactionType): Long? {
+        initializeCategoryCache()
+        val cache = categoryCache ?: return null
+
+        val lowerMerchant = merchant.lowercase(Locale.ROOT)
+        val lowerBody = messageBody.lowercase(Locale.ROOT)
+
+        if (type == TransactionType.EXPENSE) {
+            // Define keyword-to-category mappings
+            val expenseKeywords = mapOf(
+                "Food & Dining" to listOf("zomato", "swiggy", "ubereats", "dominos", "pizza",
+                    "restaurant", "food", "cafe", "starbucks", "kfc", "mcdonald", "burger"),
+                "Groceries" to listOf("grocery", "supermarket", "vegetables", "fruits", "milk",
+                    "bigbasket", "grofers", "blinkit", "dunzo", "zepto", "instamart"),
+                "Transportation" to listOf("ola", "uber", "taxi", "fuel", "petrol", "diesel",
+                    "metro", "bus", "auto", "rickshaw", "rapido"),
+                "Shopping" to listOf("amazon", "flipkart", "myntra", "ajio", "shopping",
+                    "mall", "store", "electronics", "fashion"),
+                "Bills & Utilities" to listOf("bill", "recharge", "electricity", "gas", "water",
+                    "broadband", "internet", "mobile", "jio", "airtel", "vi"),
+                "Entertainment" to listOf("netflix", "amazon prime", "hotstar", "spotify",
+                    "movie", "cinema", "ticket", "booking"),
+                "Healthcare" to listOf("hospital", "clinic", "doctor", "medical", "pharmacy",
+                    "medicine", "health", "apollo", "1mg", "pharmeasy"),
+                "Education" to listOf("school", "college", "university", "education", "course",
+                    "tuition", "fees", "book"),
+                "Travel" to listOf("flight", "hotel", "travel", "trip", "irctc", "train",
+                    "makemytrip", "goibibo"),
+                "Personal Care" to listOf("salon", "spa", "beauty", "cosmetic", "hair",
+                    "personal care", "grooming")
+            )
+
+            for ((categoryName, keywords) in expenseKeywords) {
+                if (keywords.any { lowerMerchant.contains(it) || lowerBody.contains(it) }) {
+                    return cache[categoryName]
+                }
+            }
+        } else if (type == TransactionType.INCOME) {
+            val incomeKeywords = mapOf(
+                "Salary" to listOf("salary", "wage", "pay", "employer", "payroll", "bonus"),
+                "Other Income" to listOf("interest", "dividend", "return", "cashback", "reward",
+                    "refund", "credit", "commission", "freelance")
+            )
+
+            for ((categoryName, keywords) in incomeKeywords) {
+                if (keywords.any { lowerBody.contains(it) || lowerMerchant.contains(it) }) {
+                    return cache[categoryName]
+                }
+            }
+        }
+
+        return cache["Other"]
+    }
+
+    // Method to get category by name (helper function)
+    private suspend fun getCategoryIdByName(name: String): Long? {
+        return categoryRepository.getAllCategories().firstOrNull()
+            ?.find { it.name == name }?.categoryId
     }
 
     private fun isGenericBankSender(lowerSender: String): Boolean {
