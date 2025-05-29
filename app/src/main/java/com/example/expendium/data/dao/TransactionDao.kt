@@ -97,4 +97,18 @@ interface TransactionDao {
     LIMIT :limit
 """)
     suspend fun getRecentTransactionsBySender(sender: String, limit: Int): List<Transaction>
+
+    @Query("""
+    SELECT * FROM transactions 
+    WHERE amount = :amount 
+    AND type = :type 
+    AND transactionDate BETWEEN :startTime AND :endTime
+    ORDER BY transactionDate DESC
+""")
+    suspend fun getTransactionsByAmountAndTypeInTimeRange(
+        amount: Double,
+        type: TransactionType,
+        startTime: Long,
+        endTime: Long
+    ): List<Transaction>
 }

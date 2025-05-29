@@ -71,6 +71,23 @@ class TransactionRepository @Inject constructor(
     }
 
     /**
+     * Get transactions by amount and type within a time range
+     */
+    suspend fun getTransactionsByAmountAndTypeInTimeRange(
+        amount: Double,
+        type: TransactionType,
+        startTime: Long,
+        endTime: Long
+    ): List<Transaction> {
+        return transactionDao.getTransactionsByAmountAndTypeInTimeRange(
+            amount = amount,
+            type = type,
+            startTime = startTime,
+            endTime = endTime
+        )
+    }
+
+    /**
      * Check if a transaction with similar characteristics exists
      */
     suspend fun findSimilarTransaction(
