@@ -2,19 +2,23 @@
 package com.example.expendium.ui.screen
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.getValue // Keep this
-import androidx.compose.runtime.setValue // Keep this
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.example.expendium.ui.navigation.AppDestinations
-import com.example.expendium.ui.navigation.navigateToSettings // Import the helper
+import com.example.expendium.ui.navigation.navigateToSettings
 import com.example.expendium.ui.viewmodel.TransactionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -25,87 +29,115 @@ fun MainScreen(
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // Define titles for comparison or direct use
     val transactionsTabTitle = "Transactions"
     val reportsTabTitle = "Reports"
     val categoriesTabTitle = "Categories"
     val settingsTabTitle = "Settings"
 
     val navigationItems = listOf(
-        NavigationItem(transactionsTabTitle, Icons.Filled.List),
-        NavigationItem(reportsTabTitle, Icons.Filled.Analytics),
-        NavigationItem(categoriesTabTitle, Icons.Filled.Category),
-        NavigationItem(settingsTabTitle, Icons.Filled.Settings) // This is your Settings tab
+        NavigationItem(
+            title = transactionsTabTitle,
+            selectedIcon = Icons.Filled.Receipt,
+            unselectedIcon = Icons.Outlined.Receipt
+        ),
+        NavigationItem(
+            title = reportsTabTitle,
+            selectedIcon = Icons.Filled.Analytics,
+            unselectedIcon = Icons.Outlined.Analytics
+        ),
+        NavigationItem(
+            title = categoriesTabTitle,
+            selectedIcon = Icons.Filled.Category,
+            unselectedIcon = Icons.Outlined.Category
+        ),
+        NavigationItem(
+            title = settingsTabTitle,
+            selectedIcon = Icons.Filled.Settings,
+            unselectedIcon = Icons.Outlined.Settings
+        )
     )
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(24.dp)),
+                tonalElevation = 0.dp
+            ) {
                 navigationItems.forEachIndexed { index, item ->
                     NavigationBarItem(
-                        icon = { Icon(item.icon, contentDescription = item.title) },
-                        label = { Text(item.title) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selectedTab == index) item.selectedIcon else item.unselectedIcon,
+                                contentDescription = item.title,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        },
                         selected = selectedTab == index,
                         onClick = {
-                            // Check if the clicked tab is the Settings tab
                             if (item.title == settingsTabTitle) {
-                                // Navigate to the SettingsScreen defined in your NavHost
-                                navController.navigateToSettings() // Or navController.navigate(AppDestinations.SETTINGS_ROUTE)
-                                // Optionally, you might want to keep selectedTab updated if
-                                // the NavHost for settings is outside this MainScreen's direct content area
-                                // or if you want the tab to appear selected after navigating.
-                                // For a simple navigation away, just navigating is enough.
-                                // If SETTINGS_ROUTE is a different screen outside this Scaffold's body,
-                                // the selectedTab state here might become out of sync or irrelevant
-                                // once you navigate away. Consider if selectedTab should be reset or handled
-                                // differently when navigating to a full new screen vs. swapping content in the Box.
+                                navController.navigateToSettings()
                             } else {
                                 selectedTab = index
                             }
-                        }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     )
                 }
             }
         },
         floatingActionButton = {
-            // Show FAB only on transactions tab (selectedTab == 0, assuming "Transactions" is index 0)
             if (selectedTab == 0 && navigationItems[selectedTab].title == transactionsTabTitle) {
-                FloatingActionButton(
+                ExtendedFloatingActionButton(
                     onClick = {
                         navController.navigate(AppDestinations.ADD_TRANSACTION_BASE_ROUTE)
-                    }
+                    },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(bottom = 16.dp)
                 ) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add Transaction")
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = "Add Transaction",
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Add Transaction",
+                        style = MaterialTheme.typography.labelLarge
+                    )
                 }
             }
         }
-
     ) { paddingValues ->
         Box(
             modifier = Modifier
                 .padding(paddingValues)
                 .fillMaxSize()
         ) {
-            // Display content based on selectedTab, but Settings is handled by navigation now
-            // The content for other tabs remains within this MainScreen's Box.
-            // When navigating to Settings, this Box's content will be replaced by
-            // what the NavHost displays for the SETTINGS_ROUTE.
             when (navigationItems.getOrNull(selectedTab)?.title) {
                 transactionsTabTitle -> TransactionListScreen(
                     viewModel = transactionViewModel,
                     navController = navController,
-                    // Pass the onNavigateToSettings callback if TransactionListScreen needs it
-                    // For instance, if TransactionListScreen had its own settings icon/button
                     onNavigateToSettings = { navController.navigateToSettings() }
                 )
-                reportsTabTitle -> ReportsScreen() // Your existing ReportsScreen
-                categoriesTabTitle -> CategoriesScreen(navController = navController) // Your existing CategoriesScreen
-
-                // The Settings tab now navigates, so it won't typically show content here
-                // unless you have a specific design where it shows something *before* full navigation,
-                // or if settings was a composable swapped here.
-                // Given the navigation setup, the SETTINGS_ROUTE will take over.
-                // So, we don't need a case for settingsTabTitle here to display content in this Box.
+                reportsTabTitle -> ReportsScreen()
+                categoriesTabTitle -> CategoriesScreen(navController = navController)
             }
         }
     }
@@ -113,17 +145,37 @@ fun MainScreen(
 
 data class NavigationItem(
     val title: String,
-    val icon: ImageVector
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector
 )
 
-// This ReportsScreen is fine as a placeholder within MainScreen's content area
 @Composable
 fun ReportsScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Text("Reports Screen - Coming Soon!")
+        Icon(
+            Icons.Outlined.Analytics,
+            contentDescription = null,
+            modifier = Modifier.size(80.dp),
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "Reports Coming Soon",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "We're working on detailed analytics and insights for your transactions.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
     }
 }
-
