@@ -35,6 +35,11 @@ data class Transaction(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+data class TransactionWithCategory(
+    val transaction: Transaction,
+    val categoryName: String?
+)
+
 enum class TransactionType {
     EXPENSE, INCOME
 }

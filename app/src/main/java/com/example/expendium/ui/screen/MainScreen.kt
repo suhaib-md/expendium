@@ -17,8 +17,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.example.expendium.ui.components.AppHeader
 import com.example.expendium.ui.navigation.AppDestinations
-import com.example.expendium.ui.navigation.navigateToSettings
+import com.example.expendium.ui.navigation.navigateToAccountList
 import com.example.expendium.ui.viewmodel.TransactionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,7 +33,7 @@ fun MainScreen(
     val transactionsTabTitle = "Transactions"
     val reportsTabTitle = "Reports"
     val categoriesTabTitle = "Categories"
-    val settingsTabTitle = "Settings"
+    val accountsTabTitle = "Accounts"
 
     val navigationItems = listOf(
         NavigationItem(
@@ -51,9 +52,9 @@ fun MainScreen(
             unselectedIcon = Icons.Outlined.Category
         ),
         NavigationItem(
-            title = settingsTabTitle,
-            selectedIcon = Icons.Filled.Settings,
-            unselectedIcon = Icons.Outlined.Settings
+            title = accountsTabTitle,
+            selectedIcon = Icons.Filled.AccountBalanceWallet,
+            unselectedIcon = Icons.Outlined.AccountBalanceWallet
         )
     )
 
@@ -84,8 +85,8 @@ fun MainScreen(
                         },
                         selected = selectedTab == index,
                         onClick = {
-                            if (item.title == settingsTabTitle) {
-                                navController.navigateToSettings()
+                            if (item.title == accountsTabTitle) {
+                                navController.navigateToAccountList()
                             } else {
                                 selectedTab = index
                             }
@@ -125,19 +126,36 @@ fun MainScreen(
             }
         }
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .padding(paddingValues)
                 .fillMaxSize()
         ) {
-            when (navigationItems.getOrNull(selectedTab)?.title) {
-                transactionsTabTitle -> TransactionListScreen(
-                    viewModel = transactionViewModel,
-                    navController = navController,
-                    onNavigateToSettings = { navController.navigateToSettings() }
-                )
-                reportsTabTitle -> ReportsScreen()
-                categoriesTabTitle -> CategoriesScreen(navController = navController)
+            // App Header
+            AppHeader(
+                onNavigateToSettings = {
+                    navController.navigate("settings") // Make sure this route exists in your navigation
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
+            // Main Content
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when (navigationItems.getOrNull(selectedTab)?.title) {
+                    transactionsTabTitle -> TransactionListScreen(
+                        viewModel = transactionViewModel,
+                        navController = navController,
+                        onNavigateToSettings = {
+                            navController.navigate("settings")
+                        }
+                    )
+                    reportsTabTitle -> ReportsScreen()
+                    categoriesTabTitle -> CategoriesScreen(navController = navController)
+                }
             }
         }
     }

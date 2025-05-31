@@ -7,6 +7,7 @@ import com.example.expendium.data.model.Account // Assuming this is your Account
 import com.example.expendium.data.model.Category
 import com.example.expendium.data.model.Transaction
 import com.example.expendium.data.model.TransactionType
+import com.example.expendium.data.model.TransactionWithCategory
 import com.example.expendium.data.repository.AccountRepository // Assuming you create this
 import com.example.expendium.data.repository.CategoryRepository
 import com.example.expendium.data.repository.TransactionRepository
@@ -16,11 +17,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.firstOrNull
 import javax.inject.Inject
 
-// Data class to combine Transaction with its Category Name for easier UI display
-data class TransactionWithCategory(
-    val transaction: Transaction,
-    val categoryName: String?
-)
 
 // Define TransactionUiState here or in a separate file if preferred
 data class TransactionUiState(
@@ -77,11 +73,12 @@ class TransactionViewModel @Inject constructor(
                 val query = currentUiState.searchQuery.lowercase()
                 filteredByCategory.filter { transaction ->
                     transaction.merchantOrPayee.lowercase().contains(query) ||
-                            (transaction.notes?.lowercase()?.contains(query) == true)
+                            (transaction.notes?.lowercase()?.contains(query) == true) ||
+                            (catMap[transaction.categoryId]?.lowercase()?.contains(query) == true)
                 }
             }
             searchedTransactions.map { transaction ->
-                TransactionWithCategory(transaction, catMap[transaction.categoryId])
+                TransactionWithCategory(transaction, catMap[transaction.categoryId] ?: "Uncategorized")
             }
         }.stateIn(
             scope = viewModelScope,
