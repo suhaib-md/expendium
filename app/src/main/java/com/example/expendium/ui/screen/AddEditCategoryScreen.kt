@@ -1,18 +1,32 @@
 // ui/screen/AddEditCategoryScreen.kt
 package com.example.expendium.ui.screen
 
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.example.expendium.data.model.Category
 import com.example.expendium.data.model.TransactionType
@@ -25,39 +39,24 @@ fun AddEditCategoryScreen(
     categoryId: Long?, // -1L for new, otherwise ID of category to edit
     viewModel: CategoryViewModel = hiltViewModel()
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    var categoryName by remember { mutableStateOf("") }
-    var selectedType by remember { mutableStateOf(TransactionType.EXPENSE) } // Default to Expense
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+
+    var categoryName by rememberSaveable { mutableStateOf("") }
+    var selectedType by rememberSaveable { mutableStateOf(TransactionType.EXPENSE) }
     var isEditing by remember { mutableStateOf(false) }
     var currentCategory by remember { mutableStateOf<Category?>(null) }
 
-    // For snackbar error messages
+    val screenTitle = if (isEditing) "Edit Category" else "Add Category"
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiState.errorMessage) {
-        uiState.errorMessage?.let {
-            snackbarHostState.showSnackbar(
-                message = it,
-                duration = SnackbarDuration.Short
-            )
-            viewModel.clearError()
-        }
-    }
 
+    // Load category for editing or prepare for new
     LaunchedEffect(categoryId) {
-        if (categoryId != -1L) {
+        if (categoryId != null && categoryId != -1L) {
             isEditing = true
-            // Fetch the category to edit
-            // This could also be done by having a specific function in ViewModel to load a category for editing
-            val categoryToEdit = viewModel.categories.value.firstOrNull { it.categoryId == categoryId }
-            // A more robust way would be to have viewModel.getCategoryById(categoryId).collectAsState()
-            // For now, we'll try to find it in the existing list or fetch if not found.
-            if (categoryToEdit == null) {
-                // Ideally, fetch from repository if not in the current list
-                // For simplicity here, we'll assume it might be in the list eventually or handle error
-                // viewModel.loadCategoryForEditing(categoryId) // hypothetical function
-            }
-
-            currentCategory = categoryToEdit // Could be null if not found yet
+            val categoryToEdit = categories.firstOrNull { it.categoryId == categoryId }
+            currentCategory = categoryToEdit
             categoryToEdit?.let {
                 categoryName = it.name
                 selectedType = it.type
@@ -65,101 +64,393 @@ fun AddEditCategoryScreen(
         } else {
             isEditing = false
             categoryName = ""
-            selectedType = TransactionType.EXPENSE // Reset for new
+            selectedType = TransactionType.EXPENSE
             currentCategory = null
         }
     }
 
+    // Handle error messages
+    LaunchedEffect(uiState.errorMessage) {
+        uiState.errorMessage?.let { message ->
+            snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Short)
+            viewModel.clearError()
+        }
+    }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(if (isEditing) "Edit Category" else "Add Category") },
+                title = {
+                    Text(
+                        screenTitle,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 },
-                actions = {
-                    IconButton(onClick = {
-                        if (categoryName.isBlank()) {
-                            viewModel.setError("Category name cannot be empty.") // Use viewModel to set error
-                            return@IconButton
-                        }
-                        if (isEditing && currentCategory != null) {
-                            viewModel.updateCategory(
-                                currentCategory!!.copy(
-                                    name = categoryName,
-                                    type = selectedType
-                                    // iconName could be updated here too
-                                )
-                            )
-                        } else {
-                            viewModel.addCategory(
-                                name = categoryName,
-                                type = selectedType
-                                // iconName can be added here
-                            )
-                        }
-                        // Navigate back only if there's no error or after successful operation
-                        // The LaunchedEffect for errorMessage will show the error.
-                        // Consider navigating back based on a success flag in uiState if needed.
-                        if (uiState.errorMessage == null && !uiState.isLoading) { // Basic check
-                            navController.popBackStack()
-                        }
-
-                    }) {
-                        Icon(Icons.Filled.Check, contentDescription = if (isEditing) "Save Changes" else "Save Category")
-                    }
-                }
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent
+                )
             )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        }
     ) { paddingValues ->
         Column(
             modifier = Modifier
                 .padding(paddingValues)
-                .padding(16.dp)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            OutlinedTextField(
-                value = categoryName,
-                onValueChange = { categoryName = it },
-                label = { Text("Category Name") },
-                modifier = Modifier.fillMaxWidth(),
-                isError = uiState.errorMessage?.contains("name", ignoreCase = true) == true // Basic error check
-            )
-
-            Text("Category Type:", style = MaterialTheme.typography.titleMedium)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // Category Type Selection Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
-                FilterChip(
-                    selected = selectedType == TransactionType.EXPENSE,
-                    onClick = { selectedType = TransactionType.EXPENSE },
-                    label = { Text("Expense") },
-                    enabled = !isEditing // Optionally disable type change when editing for simplicity
-                    // Or handle implications of changing type for existing transactions
-                )
-                FilterChip(
-                    selected = selectedType == TransactionType.INCOME,
-                    onClick = { selectedType = TransactionType.INCOME },
-                    label = { Text("Income") },
-                    enabled = !isEditing
-                )
+                Column(
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    Text(
+                        text = "Category Type",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CategoryTypeChip(
+                            label = "Expense",
+                            icon = Icons.AutoMirrored.Filled.TrendingDown,
+                            isSelected = selectedType == TransactionType.EXPENSE,
+                            color = Color(0xFFFF1744),
+                            modifier = Modifier.weight(1f),
+                            enabled = !isEditing
+                        ) {
+                            if (!isEditing) {
+                                selectedType = TransactionType.EXPENSE
+                            }
+                        }
+
+                        CategoryTypeChip(
+                            label = "Income",
+                            icon = Icons.AutoMirrored.Filled.TrendingUp,
+                            isSelected = selectedType == TransactionType.INCOME,
+                            color = Color(0xFF00C853),
+                            modifier = Modifier.weight(1f),
+                            enabled = !isEditing
+                        ) {
+                            if (!isEditing) {
+                                selectedType = TransactionType.INCOME
+                            }
+                        }
+                    }
+
+                    if (isEditing) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Type cannot be changed for existing categories",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        )
+                    }
+                }
             }
 
-            // Placeholder for Icon Picker
-            // Text("Icon (Optional):", style = MaterialTheme.typography.titleMedium)
-            // Button(onClick = { /* TODO: Open icon picker */ }) { Text("Select Icon") }
-
-            if (uiState.isLoading) {
-                Spacer(Modifier.height(16.dp))
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            // Category Preview Card
+            AnimatedVisibility(
+                visible = categoryName.isNotEmpty(),
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+                modifier = Modifier.padding(horizontal = 16.dp)
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (selectedType == TransactionType.INCOME)
+                            Color(0xFF00C853).copy(alpha = 0.1f)
+                        else
+                            Color(0xFFFF1744).copy(alpha = 0.1f)
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = if (selectedType == TransactionType.INCOME)
+                                Icons.AutoMirrored.Filled.TrendingUp
+                            else
+                                Icons.AutoMirrored.Filled.TrendingDown,
+                            contentDescription = null,
+                            tint = if (selectedType == TransactionType.INCOME)
+                                Color(0xFF00C853)
+                            else
+                                Color(0xFFFF1744),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = categoryName,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (selectedType == TransactionType.INCOME)
+                                Color(0xFF00C853)
+                            else
+                                Color(0xFFFF1744)
+                        )
+                    }
+                }
             }
+
+            // Form Fields Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                ),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Category Details",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    // Category Name Field
+                    ModernTextField(
+                        value = categoryName,
+                        onValueChange = { categoryName = it },
+                        label = "Category Name",
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Category,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        isError = uiState.errorMessage?.contains("name", ignoreCase = true) == true
+                    )
+
+                    // Optional: Icon Picker Placeholder
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.Palette,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Icon (Optional)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Choose an icon for this category",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = { /* TODO: Open icon picker */ }
+                            ) {
+                                Text("Select")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Save Button
+            Button(
+                onClick = {
+                    keyboardController?.hide()
+                    if (categoryName.isBlank()) {
+                        viewModel.setError("Category name cannot be empty.")
+                        return@Button
+                    }
+
+                    if (isEditing && currentCategory != null) {
+                        viewModel.updateCategory(
+                            currentCategory!!.copy(
+                                name = categoryName,
+                                type = selectedType
+                            )
+                        )
+                    } else {
+                        viewModel.addCategory(
+                            name = categoryName,
+                            type = selectedType
+                        )
+                    }
+
+                    // Navigate back on success (you might want to add a success state check)
+                    if (uiState.errorMessage == null && !uiState.isLoading) {
+                        navController.popBackStack()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(56.dp),
+                enabled = !uiState.isLoading,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                if (uiState.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Save,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isEditing) "Update Category" else "Save Category",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            // Bottom spacing
+            Spacer(modifier = Modifier.height(80.dp))
         }
     }
+}
+
+@Composable
+fun CategoryTypeChip(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    isSelected: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = modifier
+            .clickable(enabled = enabled) { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) color.copy(alpha = 0.15f) else Color.Transparent
+        ),
+        shape = RoundedCornerShape(12.dp),
+        border = if (isSelected) null else CardDefaults.outlinedCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isSelected) color else MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = if (enabled) 1f else 0.5f
+                ),
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (isSelected) color else MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = if (enabled) 1f else 0.5f
+                )
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ModernTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    leadingIcon: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    readOnly: Boolean = false,
+    isError: Boolean = false,
+    minLines: Int = 1,
+    maxLines: Int = 1
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        readOnly = readOnly,
+        isError = isError,
+        minLines = minLines,
+        maxLines = maxLines,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = MaterialTheme.colorScheme.primary,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+            focusedLabelColor = MaterialTheme.colorScheme.primary,
+            cursorColor = MaterialTheme.colorScheme.primary
+        )
+    )
 }

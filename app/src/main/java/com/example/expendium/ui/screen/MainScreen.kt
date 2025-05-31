@@ -85,11 +85,7 @@ fun MainScreen(
                         },
                         selected = selectedTab == index,
                         onClick = {
-                            if (item.title == accountsTabTitle) {
-                                navController.navigateToAccountList()
-                            } else {
-                                selectedTab = index
-                            }
+                            selectedTab = index
                         },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -155,6 +151,7 @@ fun MainScreen(
                     )
                     reportsTabTitle -> ReportsScreen()
                     categoriesTabTitle -> CategoriesScreen(navController = navController)
+                    accountsTabTitle -> AccountListScreen(navController = navController)
                 }
             }
         }
